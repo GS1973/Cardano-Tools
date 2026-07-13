@@ -1,0 +1,17 @@
+# cargo-audit configuration. Mirrors the advisory-ignore list in
+# deny.toml so the two tools agree on what is in scope.
+#
+# Rationale lives in deny.toml — keep the comments here in sync if the
+# Amaru vendor pin moves.
+
+[advisories]
+ignore = [
+  "RUSTSEC-2021-0127", # serde_cbor unmaintained (amaru dev-dep)
+  "RUSTSEC-2025-0141", # bincode unmaintained (amaru dev-dep)
+  "RUSTSEC-2026-0097", # rand 0.7 unsound (amaru dev-dep)
+  "RUSTSEC-2024-0375", # atty unmaintained (amaru dev-dep via criterion)
+  "RUSTSEC-2024-0344", # curve25519-dalek 3.2.0 timing — present in Cargo.lock via the
+                       # off-by-default vrf10 optional dep; never compiled; mitigated in
+                       # the vendored fork (see SECURITY.md). cargo-deny excludes it from
+                       # the default build graph; cargo-audit reads the lockfile, so it needs this.
+]

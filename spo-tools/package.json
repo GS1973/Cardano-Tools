@@ -1,0 +1,10 @@
+{
+  "name": "spo-tools",
+  "private": true,
+  "author": "Smit Blockchain Operations (Pool BKIND) <developmentbkind@gmail.com>",
+  "workspaces": [
+    "shared-frontend",
+    "online-tool/frontend",
+    "signer/frontend"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "name": "@airgap-core/frontend",
+  "version": "1.0.0",
+  "private": true,
+  "author": "Smit Blockchain Operations (Pool BKIND) <developmentbkind@gmail.com>",
+  "type": "module",
+  "exports": {
+    "./types/core-wire": "./src/types/core-wire.ts"
+  }
+}

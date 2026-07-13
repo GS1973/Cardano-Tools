@@ -1,0 +1,31 @@
+# Rust build artifacts
+/target/
+
+# Editor files
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Local env / secrets — never commit
+.env
+.env.local
+*.skey
+*.vkey
+
+# Node
+node_modules/
+**/node_modules/
+**/dist/
+
+# Frontend build artifacts
+*.tsbuildinfo
+
+# ts_rs cross-crate scatter (neutral types are served by @airgap-core/frontend)
+/shared/frontend/
+/online-tool/frontend/src/types/core-wire.ts
+/signer/frontend/src/types/core-wire.ts

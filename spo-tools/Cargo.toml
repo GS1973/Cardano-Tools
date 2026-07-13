@@ -1,0 +1,61 @@
+# SPO Tools — Cardano Stake Pool Operator management toolkit.
+#
+# Workspace contains three crates:
+#   shared      — types, traits, and helpers used by both backend and signer
+#   online-tool — internet-connected web app (Axum + Pallas, watch + submit)
+#   signer      — air-gapped signing application (Pallas, no network)
+#
+# Both binaries compile to standalone executables, distributed as single files.
+
+[workspace]
+resolver = "2"
+members = ["shared", "online-tool", "signer"]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+authors = ["Smit Blockchain Operations (Pool BKIND) <developmentbkind@gmail.com>"]
+
+[workspace.dependencies]
+# Workspace-pinned versions: every crate inherits the exact same version.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Async runtime + web framework for the online tool.
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net", "time"] }
+axum = "0.8"
+
+# HTTP client for talking to Koios. rustls-tls so we do not pull in OpenSSL.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# Pallas — Cardano native Rust building blocks.
+pallas-primitives = "0.35"
+pallas-codec      = "0.35"
+pallas-crypto     = "0.35"
+pallas-addresses  = "0.35"
+pallas-math       = "0.35"
+
+# Uniform Resources — bytes <-> UR strings, the wire format we send across QR.
+# UR is a Blockchain Commons standard; multi-part / fountain encoding gives
+# robustness against missed frames in animated QR transmission.
+ur = "0.4"
+
+# Best-effort zeroization of secret-bearing buffers on drop. Defends
+# against core dumps, swap-out and same-uid /proc/<pid>/mem reads.
+zeroize = { version = "1", features = ["derive"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
+# Trap on integer overflow in release builds too, instead of silently
+# wrapping. Chain math (epoch / slot / KES-period arithmetic) must fail
+# closed: a wrapped slot or counter feeding a leaderlog range, an opcert,
+# or a chain_context snapshot is a correctness and security fault, not a
+# graceful degradation. The hot paths use saturating arithmetic; this is
+# the backstop for anything that slips through.
+overflow-checks = true

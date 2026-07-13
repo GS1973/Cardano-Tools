@@ -1,0 +1,20 @@
+{
+  "pool_id_bech32": "pool1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq8a7a2d",
+  "vrf_key_hash": "0000000000000000000000000000000000000000000000000000000000000001",
+  "owners": ["stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq28lj8u"],
+  "is_single_owner": true,
+  "pledge_lovelace": 100000000000,
+  "margin": 0.01,
+  "margin_numerator": 1,
+  "margin_denominator": 100,
+  "fixed_cost_lovelace": 170000000,
+  "reward_address": "stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq28lj8u",
+  "relays": [{ "ipv4": "1.2.3.4", "ipv6": null, "dns": null, "srv": null, "port": 3001 }],
+  "metadata_url": "https://example.com/pool.json",
+  "metadata_hash": "0000000000000000000000000000000000000000000000000000000000000002",
+  "payment_address": "addr1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq8s2tngs",
+  "payment_utxo_total_lovelace": 5000000000,
+  "estimated_fee_lovelace": 250000,
+  "can_cover_fee": true,
+  "pending": null
+}

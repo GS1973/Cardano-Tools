@@ -1,0 +1,86 @@
+# cargo-deny configuration for SPO Tools.
+# See https://embarkstudios.github.io/cargo-deny/ for the schema.
+
+[graph]
+all-features = false
+no-default-features = false
+
+[advisories]
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+# Ignored advisories. These all surface only through the dev-dependencies
+# of the vendored Amaru crates (their own benchmark + test infrastructure)
+# and never reach the spo-tools-online or spo-tools-signer binaries.
+# (RUSTSEC-2024-0344, the curve25519-dalek 3.2.0 timing issue, is not listed
+# here: cargo-deny works from the default-feature build graph, which excludes
+# the off-by-default optional vrf10 dependency, so the published 3.2.0 is out
+# of scope. cargo-audit reads Cargo.lock, where it is still pinned, so its
+# suppression lives in .cargo/audit.toml — see SECURITY.md.)
+# Re-evaluate every Amaru bump.
+ignore = [
+  # serde_cbor unmaintained — only in amaru-kes-summed-ed25519 dev-deps
+  "RUSTSEC-2021-0127",
+  # bincode unmaintained — only in amaru-curve25519-dalek dev-deps
+  "RUSTSEC-2025-0141",
+  # rand 0.7.3 unsound advisory — surfaces only in amaru dev-deps
+  "RUSTSEC-2026-0097",
+  # atty unmaintained — only in amaru dev-deps via criterion
+  "RUSTSEC-2024-0375",
+]
+
+[bans]
+# A single version per crate is the goal. Deny duplicate versions so a
+# NEW, unexpected duplicate from a dependency bump fails the check and
+# gets reviewed - instead of silently sliding in under a blanket "warn".
+# The duplicates that already exist are enumerated in `skip` below: they
+# come from the vendored Amaru crates (digest / block-buffer / sha2 /
+# rand_core 0.9 vs 0.10, minicbor) and from ecosystem churn the tree
+# cannot avoid (thiserror 1 vs 2, bech32 via
+# pallas, getrandom, and the wasi / windows-sys platform crates). Skipping
+# by name tolerates these known offenders while still failing on any crate
+# not on the list. Re-evaluate on every Amaru bump.
+multiple-versions = "deny"
+wildcards = "allow"
+highlight = "all"
+skip = [
+  { crate = "bech32" },
+  { crate = "block-buffer" },
+  { crate = "digest" },
+  { crate = "getrandom" },
+  { crate = "minicbor" },
+  { crate = "rand_core" },
+  { crate = "sha2" },
+  { crate = "thiserror" },
+  { crate = "thiserror-impl" },
+  { crate = "wasi" },
+  { crate = "windows-sys" },
+]
+
+[licenses]
+# Allow the licenses that match SPO Tools' own dual MIT-or-Apache-2.0,
+# plus the BSD/MIT family that surfaces from rust-crypto + tokio crates.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "CC0-1.0",
+  "BSL-1.0",
+  # BlueOak surfaces in some serde-related crates.
+  "BlueOak-1.0.0",
+  # CDLA-Permissive-2.0 surfaces in some webpki/encoding utilities.
+  "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.8
+
+[sources]
+# Only allow git deps that we explicitly vendor (none currently — the
+# Amaru crates are vendored as path deps under ./vendor/).
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

@@ -1,0 +1,83 @@
+[package]
+name = "signer"
+version = "1.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "spo-tools-signer"
+path = "src/main.rs"
+
+[dependencies]
+shared = { path = "../shared" }
+
+# Cardano crypto: Ed25519 + Ed25519-BIP32 (SecretKeyExtended) for signing
+# with extended keys converted from mnemonic wallets.
+pallas-crypto.workspace = true
+
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# Web UI: Axum on 127.0.0.1:8201 that serves the embedded Vue frontend
+# so the SPO can drive the signer through their browser. Same versions
+# as online-tool.
+tokio.workspace = true
+axum.workspace = true
+
+# Fixed security response headers (CSP, X-Frame-Options, X-Content-Type-Options).
+tower-http = { version = "0.6", features = ["set-header"] }
+
+# Frontend assets are embedded into the binary at compile time so the
+# signer is a single executable that can be copied onto the air-gapped VM.
+rust-embed = "8"
+mime_guess = "2"
+
+
+# Cardano Praos VRF primitives. We pull only the low-level vrf-dalek crate
+# from the Amaru repo (the higher-level amaru-ouroboros wrapper has a
+# MSRV of rustc 1.97 which is not stable yet at time of writing). This
+# vendor crate is edition 2018, no high MSRV, and exposes exactly what we
+# need: SecretKey03, PublicKey03, VrfProof03.
+# Cargo dep-key `vrf_dalek` makes the Rust import `use vrf_dalek::...`.
+vrf_dalek = { package = "amaru-vrf-dalek", path = "../vendor/amaru-vrf-dalek" }
+
+# Blake2b-256 for the VRF input challenge (slot_be || epoch_nonce).
+blake2 = "0.10"
+hex    = "0.4"
+
+# KES (Key Evolving Signatures) for opcert generation. We use the same
+# vendored crate Amaru itself uses for header verification, edition 2021,
+# no MSRV surprises. Mainnet uses Sum6Kes (depth 6 → 64 KES periods ×
+# 129600 slots each ≈ 96 days of validity). Exact upstream coordinates and
+# the content pin for every vendored crate are recorded in
+# vendor/PROVENANCE.md.
+kes_summed_ed25519 = { package = "amaru-kes-summed-ed25519", path = "../vendor/amaru-kes-summed-ed25519" }
+
+# Ed25519 signing for the operational certificate. Cold-key signs
+# (kes_vkey || issue_no || kes_period) and the result goes into the opcert.
+ed25519-dalek = "2"
+
+# CBOR encoding for opcert (4-element array [vkey, counter, period, sig])
+# and for the cardano-cli .skey envelope (cborHex field of JSON files).
+minicbor = { version = "0.24", features = ["alloc"] }
+getrandom = "0.2"
+
+sha2 = "0.10"
+
+# Best-effort zeroization of secret-bearing buffers on drop.
+zeroize = { workspace = true }
+
+
+
+[dev-dependencies]
+tempfile = "3"
+reqwest = { workspace = true }
+axum = { workspace = true }
+serde_json = { workspace = true }
+shared = { path = "../shared" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "time", "process", "io-util"] }

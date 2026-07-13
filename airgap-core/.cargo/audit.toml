@@ -1,0 +1,11 @@
+# cargo-audit configuration for airgap-core.
+#
+# airgap-core's dependency tree carries none of the vendored-Amaru
+# advisories the tools accept (it links no VRF/KES crate and rides on
+# curve25519-dalek 4.x). Nothing is ignored here on purpose: a real
+# advisory against this published library must be triaged, not silenced.
+# Keep in sync with the empty ignore list in deny.toml. Enforced by the
+# `cargo audit --deny warnings` CI job (.github/workflows/ci.yml).
+
+[advisories]
+ignore = []
