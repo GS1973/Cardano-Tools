@@ -278,7 +278,12 @@ signer. Operational features refuse to run before pairing is complete.
 
 ### Workflow
 
-Every feature follows the same five-step shape:
+Most features build, sign and submit a transaction and follow the same
+five-step shape. Two do not: **Leaderlog** only predicts your
+block-production schedule — nothing is signed or submitted — and **KES
+rotation** returns downloadable key and certificate files to deploy to
+your node instead of submitting a transaction. For the transaction
+features the shape is:
 
 1. Fill in the form on the online client and click **Send to Signer**.
    A confirmation modal opens summarising the operation and asking for
@@ -300,6 +305,15 @@ Every feature follows the same five-step shape:
 
 Both sides accept UR fragments either via webcam-scanned QR or pasted
 as text.
+
+**Deploying a KES rotation.** The signer returns the new `kes.skey`,
+`node.cert` and `cold.counter`. Deploy `kes.skey` and `node.cert` to your
+block-producer node and restart it; keep `cold.counter` with your
+cold-key backups. Rotate before the current operational certificate's
+KES-period window expires — the KES Rotation page shows a live countdown.
+Immediately after a rotation the on-chain op-cert counter trails your
+local record by one until the pool mints its next block, which is
+expected.
 
 ## Maintainer
 
