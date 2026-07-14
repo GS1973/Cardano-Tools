@@ -14,6 +14,31 @@ validation on the signer, and an end-to-end encrypted channel between
 online tool and signer. All six features validated on Cardano mainnet
 against a live stake pool.
 
+## Screenshots
+
+A full leaderlog round-trip across the air-gap — from the online coordinator to the
+air-gapped signer and back. Every field is shown on the signer before anything is signed.
+
+**Online client — build the leaderlog request**
+
+![Online client building a leaderlog request as an animated QR and UR fragments](docs/screenshots/01-online-leaderlog-request.jpg)
+
+**Request QR enlarged for the signer's camera**
+
+![The request QR enlarged for scanning](docs/screenshots/02-request-qr-enlarged.jpg)
+
+**Air-gapped signer — review and sign**
+
+![Air-gapped signer showing the leader-schedule computation preview before signing](docs/screenshots/03-signer-preview-and-sign.jpg)
+
+**Signer — signed result returned across the boundary**
+
+![Signer showing the signed result as a QR and UR fragments](docs/screenshots/04-signer-result.jpg)
+
+**Online client — the computed leader schedule**
+
+![Online client rendering the leader schedule with slots and times](docs/screenshots/05-online-leaderlog-schedule.jpg)
+
 ## Features
 
 - **Leaderlog** — Praos VRF block-schedule prediction. Automatic
