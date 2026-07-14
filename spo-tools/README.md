@@ -113,12 +113,14 @@ Hardware wallets (Ledger, Trezor) are not supported.
 
 ## Limitations (v1.0)
 
-- Linux, x86-64. Prebuilt binaries ship in two builds: a standard
+- Linux, x86-64 and arm64. For x86-64, prebuilt binaries ship in two builds: a standard
   **glibc** build (modern distributions — glibc >= 2.34: Ubuntu 22.04+,
   Debian 12+, Fedora 35+, RHEL/Rocky/Alma 9+, Arch, recent openSUSE) and
   a fully static **musl** build (`-musl`) that runs on any x86-64 Linux,
   including older LTS releases, Alpine, and minimal/live environments.
-  Use `-musl` if the standard build reports `GLIBC_x.xx not found`.
+  Use `-musl` if the standard build reports `GLIBC_x.xx not found`. For arm64
+  (Raspberry Pi 3/4/5, Zero 2, and other 64-bit ARM boards on a 64-bit OS), a
+  fully static **`-arm64`** build is provided.
 
 Single-pool operators only — by design, not a missing feature. Multi-pool
 operation concentrates stake and works against the decentralisation this tool
