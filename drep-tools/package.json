@@ -1,0 +1,10 @@
+{
+  "name": "drep-tools",
+  "private": true,
+  "author": "Smit Blockchain Operations (Pool BKIND) <developmentbkind@gmail.com>",
+  "workspaces": [
+    "shared-frontend",
+    "drep-online/frontend",
+    "drep-signer/frontend"
+  ]
+}

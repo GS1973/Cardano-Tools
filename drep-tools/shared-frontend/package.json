@@ -1,0 +1,36 @@
+{
+  "name": "@drep-tools/shared-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "author": "Smit Blockchain Operations (Pool BKIND) <developmentbkind@gmail.com>",
+  "type": "module",
+  "dependencies": {
+    "@airgap-core/frontend": "file:../../airgap-core/frontend"
+  },
+  "exports": {
+    "./style.css": "./src/style.css",
+    "./theme": "./src/theme.ts",
+    "./components/QRScanner.vue": "./src/components/QRScanner.vue",
+    "./components/SendQrPanel.vue": "./src/components/SendQrPanel.vue",
+    "./components/ReceiveQrPanel.vue": "./src/components/ReceiveQrPanel.vue",
+    "./components/RequestFingerprintBadge.vue": "./src/components/RequestFingerprintBadge.vue",
+    "./components/PreSendConfirm.vue": "./src/components/PreSendConfirm.vue",
+    "./views/PairingView.vue": "./src/views/PairingView.vue",
+    "./stores/notification": "./src/stores/notification.ts",
+    "./utils/format": "./src/utils/format.ts",
+    "./utils/error": "./src/utils/error.ts",
+    "./utils/lovelace": "./src/utils/lovelace.ts",
+    "./types/wire": "./src/types/wire.ts",
+    "./types/errors": "./src/types/errors.ts",
+    "./constants/timings": "./src/constants/timings.ts",
+    "./composables/useQrCarousel": "./src/composables/useQrCarousel.ts",
+    "./composables/useScannerControl": "./src/composables/useScannerControl.ts"
+  },
+  "peerDependencies": {
+    "vue": "^3.5.0",
+    "vuetify": "^4.0.0",
+    "pinia": "^3.0.0",
+    "html5-qrcode": "^2.3.8",
+    "vue-router": "^4.4.0"
+  }
+}

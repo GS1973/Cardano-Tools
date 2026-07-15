@@ -1,0 +1,59 @@
+# DRep Tools — Cardano DRep identity management + governance voting.
+#
+# Air-gapped pair (drep-online + drep-signer) for registering, updating,
+# retiring, and voting as a Cardano DRep. Built entirely on the
+# role-neutral `airgap-core` library (shared with SPO Tools, never
+# depending on it). The DRep signing key never touches a networked
+# machine.
+#
+# Workspace crates:
+#   shared      — DRep wire types + body validators
+#   drep-online — internet-connected web app (Axum + Pallas + Koios)
+#   drep-signer — air-gapped signing application (Pallas, no network)
+
+[workspace]
+resolver = "2"
+members = ["shared", "drep-online", "drep-signer"]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+authors = ["Smit Blockchain Operations (Pool BKIND) <developmentbkind@gmail.com>"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_with = "3"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net", "time"] }
+axum = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+pallas-primitives = "0.35"
+pallas-codec      = "0.35"
+pallas-crypto     = "0.35"
+pallas-addresses  = "0.35"
+
+ur = "0.4"
+zeroize = { version = "1", features = ["derive"] }
+
+# The shared role-neutral library — sibling repo, never SPO Tools.
+airgap-core = { path = "../airgap-core" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
+# Trap on integer overflow in release builds too, instead of silently
+# wrapping. Lovelace math (fee + deposit sums, change = utxo_total −
+# fee − deposit, min-ADA from Koios-supplied coefficients) must fail
+# closed: a wrapped sum or product feeding a fee, a refund, or a
+# funding decision is a correctness and security fault, not a graceful
+# degradation. The hot paths use checked/saturating arithmetic; this is
+# the backstop for anything that slips through. airgap-core builds
+# under this profile too.
+overflow-checks = true

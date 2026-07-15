@@ -1,0 +1,42 @@
+# cargo-deny configuration. This tool vendors nothing (no vendor/ dir); all
+# dependencies come from crates.io.
+
+[graph]
+all-features = false
+no-default-features = false
+
+[advisories]
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+ignore = []
+
+[bans]
+# One version per crate is the goal; a NEW unexpected duplicate from a
+# dependency bump fails the check and gets reviewed. Known ecosystem-churn
+# duplicates are enumerated in skip.
+multiple-versions = "deny"
+wildcards = "allow"
+highlight = "all"
+skip = [
+  { crate = "bech32" },
+  { crate = "minicbor" },
+  { crate = "thiserror" },
+  { crate = "thiserror-impl" },
+  { crate = "windows-sys" },
+]
+
+[licenses]
+allow = [
+  "MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause", "BSD-3-Clause", "ISC",
+  "Unicode-3.0", "CC0-1.0",
+  "BSL-1.0", "BlueOak-1.0.0", "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.8
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
