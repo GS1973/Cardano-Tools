@@ -106,8 +106,8 @@ Two `cardano-cli` signing-key forms are accepted for the **payment** and
   mnemonic-wallet owner (Eternl, Lace, Yoroi, …) gets by exporting the
   recovery phrase with `cardano-address` (standard CIP-1852 path) and
   converting with `cardano-cli key convert-cardano-address-key`. The
-  signer detects the extended form automatically and signs scalar-based
- , it never treats an extended key as a 32-byte seed, which would
+  signer detects the extended form automatically and signs scalar-based,
+  it never treats an extended key as a 32-byte seed, which would
   derive a different key and a different address. On load it cross-checks
   the public key embedded in the skey envelope against the one derived
   from the secret.
