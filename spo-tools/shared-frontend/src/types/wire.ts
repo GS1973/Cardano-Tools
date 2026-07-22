@@ -2,6 +2,24 @@
 import type { ChainContext, UtxoInput, VkeyWitness } from "@airgap-core/frontend/types/core-wire";
 
 /**
+ * A CIP-100 author witness, embedded in an author entry of governance
+ * metadata (CIP-108 / CIP-136).
+ */
+export type Cip100Witness = { 
+/**
+ * Always "ed25519".
+ */
+witness_algorithm: string, 
+/**
+ * 32-byte ed25519 verification key, hex.
+ */
+public_key_hex: string, 
+/**
+ * 64-byte ed25519 signature over blake2b-256 of the canonical body, hex.
+ */
+signature_hex: string, };
+
+/**
  * `deny_unknown_fields` rejects an unknown field inside the struct
  * variants (`key_hash` / `script_hash`); for the unit variants
  * (`abstain` / `no_confidence`) serde's internally-tagged deserializer
@@ -257,6 +275,25 @@ export type PoolUpdateResult = { body_hash_hex: string, witnesses: Array<VkeyWit
  */
 export type RelaySpec = { "kind": "single_host_addr", port: number | null, ipv4: string | null, ipv6: string | null, } | { "kind": "single_host_name", port: number | null, dns: string, } | { "kind": "multi_host_name", dns: string, };
 
+export type SpoWitnessRequest = { 
+/**
+ * Always [`WireKind::WitnessDoc`].
+ */
+kind: WireKind, 
+/**
+ * CIP-100 canonical body (N-Quads). Its blake2b-256 is the payload the
+ * witness signs. The signer refuses anything that is not a canonical
+ * body, so this key cannot be steered into signing a transaction hash.
+ */
+canonical_body: string, 
+/**
+ * The pool whose cold key witnesses the document. The cold key must
+ * hash to this pool id; its vkey becomes the witness publicKey.
+ */
+pool_id_bech32: string, operator_pin_proof: string, chain_context: ChainContext, };
+
+export type SpoWitnessResult = { body_hash_hex: string, witness: Cip100Witness, };
+
 /**
  * Optional public rationale for the vote — a document URL plus the
  * 32-byte hash of its contents, the same shape as pool metadata. When
@@ -329,7 +366,7 @@ operator_pin_proof: string, chain_context: ChainContext, };
 
 export type VoteResult = { body_hash_hex: string, witnesses: Array<VkeyWitness>, };
 
-export type WireKind = "leaderlog" | "kes_rotation" | "withdrawal" | "drep_delegation" | "pool_update" | "vote";
+export type WireKind = "leaderlog" | "kes_rotation" | "withdrawal" | "drep_delegation" | "pool_update" | "vote" | "witness_doc";
 
 /**
  * Wire-level discriminator for WithdrawalRequest. The signer rejects payloads

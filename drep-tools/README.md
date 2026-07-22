@@ -3,7 +3,7 @@
 Cardano **DRep** (delegated representative) management toolkit. Air-gapped
 signer plus online coordinator, with QR/UR fragments crossing the boundary
 so the DRep signing key never touches the network. Each side runs a local
-web UI in your browser — no CLI flags, no Haskell, no Plutus knowledge
+web UI in your browser, no CLI flags, no Haskell, no Plutus knowledge
 needed.
 
 Self-hosted, open source, Linux-only. No Docker, no SaaS, no mobile apps.
@@ -14,14 +14,16 @@ other's code; both depend only on `airgap-core`.
 
 ## Status
 
-**v1.0.0** — full lifecycle (register / update / retire / vote),
+**v1.1.0**: full lifecycle (register / update / retire / vote) plus a
+rationale-witness step (the CIP-100 author witness for a vote's CIP-136
+metadata),
 body-level validation on the signer, and an end-to-end encrypted channel
 between online tool and signer. Built and tested: builder↔validator
 round-trips for every operation, and an end-to-end sign-and-verify of both
 witnesses on the signer. The air-gap transport is the same one SPO Tools
 used to cast a real SPO governance vote on Cardano mainnet. The DRep
-mainnet end-to-end (register → vote → refresh) is the remaining validation
-step.
+mainnet end-to-end (register → vote → refresh), and a live vote carrying a
+witnessed rationale, are the remaining validation steps.
 
 ## Screenshots
 
@@ -53,30 +55,41 @@ signed.
 
 ![Online client showing the vote submitted to Cardano with its transaction hash](docs/screenshots/06-online-submitted.jpg)
 
-## Features — the four DRep operations
+## Features: the four DRep operations
 
-- **Register** — `RegDRepCert` with the refundable deposit (500 ADA on
+- **Register**: `RegDRepCert` with the refundable deposit (500 ADA on
   mainnet, read live from Koios epoch params) and an optional CIP-119
   manifest anchor.
-- **Update / refresh** — `UpdateDRepCert`. Two uses in one cert: point the
+- **Update / refresh**: `UpdateDRepCert`. Two uses in one cert: point the
   on-chain anchor at an updated manifest, and **reset the activity
-  counter** — a DRep that does not vote or refresh for `drep_activity`
+  counter**: a DRep that does not vote or refresh for `drep_activity`
   epochs (20 on mainnet) goes dormant and its voting power stops counting.
   A bare keep-alive with no new anchor is valid.
-- **Retire** — `UnRegDRepCert`, refunding the deposit. The refund amount is
+- **Retire**: `UnRegDRepCert`, refunding the deposit. The refund amount is
   read from Koios `drep_info` (what was actually locked at registration),
-  not from the current parameter — they can differ if the deposit changed
+  not from the current parameter, they can differ if the deposit changed
   meanwhile.
-- **Vote** — a `Voter::DRepKey` vote on any open governance action
+- **Vote**: a `Voter::DRepKey` vote on any open governance action
   (parameter changes, hard forks, treasury, committee, constitution, info),
   with an optional CIP-136 rationale anchor. Unlike an SPO, a DRep votes on
-  **every** action type — including the parameter groups (`k`/nOpt,
+  **every** action type, including the parameter groups (`k`/nOpt,
   minPoolCost, …) an SPO cannot touch.
 
 Each operation is one small transaction: a single fee input from the
 payment address, a single change output back to it, the DRep certificate
-or voting procedure in the middle, and two witnesses — the **payment** key
+or voting procedure in the middle, and two witnesses, the **payment** key
 spends the input, the **DRep** key authorises the action.
+
+## Rationale witness (CIP-136)
+
+A separate step, not a transaction. The online tool canonicalises a
+hand-authored CIP-136 rationale body (URDNA2015, per CIP-100); the signer
+signs its blake2b-256 with the DRep key, and the tool injects the CIP-100
+author witness into the file. Without it a vote's anchor renders as raw
+JSON instead of a rationale. The signer refuses to sign anything that is
+not a canonical governance-metadata body, so the DRep key cannot be
+steered into signing a transaction. The signed rationale is published
+like any manifest and referenced by the vote's anchor.
 
 The channel between online tool and signer is **end-to-end encrypted**.
 After a one-time visual-fingerprint pairing, every QR / UR payload is
@@ -91,33 +104,33 @@ Every 4xx/5xx response from the online tool is a structured JSON envelope
 dispatch on the stable `code` instead of parsing free-form text.
 
 Both `drep-tools-online` and `drep-tools-signer` ship as single
-self-contained binaries — the Vue frontend is embedded via `rust-embed`.
+self-contained binaries, the Vue frontend is embedded via `rust-embed`.
 Copy the binary anywhere and run.
 
 ## Key isolation
 
 The `drep-signer` holds only two keys: the **DRep signing key** and a
 **payment signing key** (for fees and the deposit). Its config struct has
-no field for a pool cold key — the binary cannot name, let alone load, the
+no field for a pool cold key, the binary cannot name, let alone load, the
 operator's cold key. A compromise of the DRep signer cannot reach the SPO
 role's keys, and vice versa.
 
 Before signing, the signer additionally checks that the loaded DRep
 verification key hashes (blake2b-224) to the DRep id named in the request.
 A compromised online tool therefore cannot make the signer act as a
-different DRep — the key that signs must be the DRep the request claims.
+different DRep, the key that signs must be the DRep the request claims.
 
 ## Supported key formats
 
 Two `cardano-cli` DRep signing-key forms are accepted:
 
-- **Plain Ed25519** — `DRepSigningKey_ed25519`, as produced by
+- **Plain Ed25519**: `DRepSigningKey_ed25519`, as produced by
   `cardano-cli conway governance drep key-gen`.
-- **Extended BIP32-Ed25519** — `DRepExtendedSigningKey_ed25519_bip32`, what
+- **Extended BIP32-Ed25519**: `DRepExtendedSigningKey_ed25519_bip32`, what
   a mnemonic-wallet owner gets by deriving the DRep key at CIP-105 path
   `1852'/1815'/account'/3/0` with `cardano-address` and converting with
   `cardano-cli key convert-cardano-address-key`. The signer detects the
-  extended form automatically and signs scalar-based — it never treats an
+  extended form automatically and signs scalar-based, it never treats an
   extended key as a 32-byte seed. On load it cross-checks the public key
   embedded in the skey envelope against the one derived from the secret.
 
@@ -126,16 +139,16 @@ The same two forms are accepted for the **payment** key
 `PaymentExtendedSigningKeyShelley_ed25519_bip32`).
 
 DRep ids are accepted in either **CIP-105** (bare 28-byte key hash) or
-**CIP-129** (header byte + hash) bech32. Script-based DReps are rejected —
+**CIP-129** (header byte + hash) bech32. Script-based DReps are rejected,
 this tool manages a key-based DRep only.
 
 Hardware-wallet owners (Ledger, Trezor) are not supported; the signer
 works with CLI-exported keys only.
 
-## Limitations (v1.0)
+## Limitations (v1.1)
 
 - Linux, x86-64 and arm64. For x86-64, prebuilt binaries ship in two builds: a standard
-  **glibc** build (modern distributions — glibc >= 2.34: Ubuntu 22.04+,
+  **glibc** build (modern distributions, glibc >= 2.34: Ubuntu 22.04+,
   Debian 12+, Fedora 35+, RHEL/Rocky/Alma 9+, Arch, recent openSUSE) and
   a fully static **musl** build (`-musl`) that runs on any x86-64 Linux,
   including older LTS releases, Alpine, and minimal/live environments.
@@ -143,14 +156,14 @@ works with CLI-exported keys only.
   (Raspberry Pi 3/4/5, Zero 2, and other 64-bit ARM boards on a 64-bit OS), a
   fully static **`-arm64`** build is provided.
 - Key-based DReps only (script / multi-sig DRep credentials are not supported).
-- Identity management and voting only — proposing governance actions
+- Identity management and voting only, proposing governance actions
   (submitting proposals, not just voting on them) is out of scope.
 
 ## Funding address
 
 The payment address funds the transaction fee and, for registration, the
 deposit; change returns to it. The signer is air-gapped and cannot consult
-the chain, so it trusts the inputs the online tool claims it picked —
+the chain, so it trusts the inputs the online tool claims it picked,
 mitigated by three independent layers:
 
 1. The online tool sends the funding **inputs** (with their claimed
@@ -183,21 +196,21 @@ software detecting that separation.
 Register and update can anchor a **CIP-119** manifest (identity,
 motivations, objectives, qualifications); each vote can anchor a
 **CIP-136** rationale (summary, statement, references). An anchor is a URL
-plus the blake2b-256 hash of the document, so the host need not be trusted
-— the hash makes the document tamper-evident. Host the documents anywhere
+plus the blake2b-256 hash of the document, so the host need not be trusted,
+the hash makes the document tamper-evident. Host the documents anywhere
 stable (your own domain, IPFS). Never move or delete an anchored document:
 the hash still matches but the pointer dangles and explorers can no longer
 fetch the rationale.
 
 ## Workspace layout
 
-- `shared/` — DRep wire types + body validators
-- `shared-frontend/` — Vue transport components, stores, formatters (the
+- `shared/`, DRep wire types + body validators
+- `shared-frontend/`, Vue transport components, stores, formatters (the
   DRep tool's own copy; never imports SPO Tools)
-- `drep-online/` — internet-connected coordinator (Axum + Pallas + Koios)
-- `drep-signer/` — air-gapped signer (Pallas, no network)
+- `drep-online/`, internet-connected coordinator (Axum + Pallas + Koios)
+- `drep-signer/`, air-gapped signer (Pallas, no network)
 
-All four build on the sibling **`airgap-core`** crate — the role-neutral
+All four build on the sibling **`airgap-core`** crate, the role-neutral
 air-gap transport (X25519 + XChaCha20-Poly1305, UR/QR, pairing, PIN) and
 Cardano primitives (tx assembly, body validation, key loading) shared with
 SPO Tools. Check it out next to this repo:
@@ -268,7 +281,7 @@ then:
 
 Acknowledge the air-gap reminder, open the URL printed at startup and
 configure the file paths to your DRep and payment signing keys. Keys are
-read from disk on every sign — kept in memory only for the duration of the
+read from disk on every sign, kept in memory only for the duration of the
 operation. Config is saved to `~/.config/drep-tools/signer.json`.
 
 ### Pair the two sides (one-time, ~1 min)
@@ -286,7 +299,7 @@ Every operation follows the same five-step shape:
 
 1. Fill in the form on the online client and click **Send to Signer**. A
    confirmation modal opens summarising the operation and asking for a
-   4-digit **operator PIN**. Pick any 4 digits — you retype the same PIN on
+   4-digit **operator PIN**. Pick any 4 digits, you retype the same PIN on
    the signer in step 3.
 2. The online client builds the request, encrypts it, and shows it as an
    animated QR plus a list of UR fragments alongside an 8-byte **request
@@ -295,7 +308,7 @@ Every operation follows the same five-step shape:
    payload, displays the same fingerprint and an operation-specific
    preview. Verify the fingerprint matches the one on the online tool,
    click **Confirm and sign**, and retype the PIN. The signer refuses to
-   sign on PIN mismatch — or if the loaded DRep key does not hash to the
+   sign on PIN mismatch, or if the loaded DRep key does not hash to the
    request's DRep id.
 4. The signer encrypts the result and shows it as another QR / UR sequence.
 5. The online client scans (or pastes) the result and submits the signed
@@ -306,7 +319,7 @@ text.
 
 ## Maintainer
 
-Smit Blockchain Operations (Pool BKIND) — <developmentbkind@gmail.com>
+Smit Blockchain Operations (Pool BKIND), <developmentbkind@gmail.com>
 
 ## Support this work
 
@@ -336,7 +349,7 @@ You alone are responsible for:
 - the outcome of any transaction you sign and submit.
 
 To the fullest extent permitted by law, the author accepts no liability for
-any loss or damage — including loss of funds, keys, or voting power —
+any loss or damage, including loss of funds, keys, or voting power,
 arising from the use of, or inability to use, this software. Use it at your
 own risk.
 
@@ -344,7 +357,7 @@ Nothing here is financial, tax, or legal advice. Always confirm against the
 on-chain state and your own records.
 
 This is open source so that you never have to take it on trust. In case of
-any doubt, read the source — or have someone you trust check it for you —
+any doubt, read the source, or have someone you trust check it for you,
 before you rely on it.
 
 ## License

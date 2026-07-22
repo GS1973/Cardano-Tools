@@ -411,6 +411,25 @@
     </v-card-text>
   </v-card>
 
+  <!-- Preview: witness a rationale (CIP-100 author witness, not a tx) -->
+  <v-card v-if="parsed?.kind === 'witness-doc'" ref="previewCardEl" class="mb-4">
+    <v-card-text>
+      <h3 class="text-subtitle-1 mt-0 mb-2">Preview: Witness rationale (CIP-100)</h3>
+      <p class="text-body-2 text-medium-emphasis mb-3">
+        This produces a CIP-100 author witness over the canonical body below, NOT a transaction. The signer hashes the exact bytes shown (Blake2b-256) and signs with your pool cold key; the cold key must hash to the pool id below or the signer refuses.
+      </p>
+      <v-table density="compact" class="mb-3"><tbody>
+        <tr><td class="text-medium-emphasis" style="width: 220px;">Witness as pool</td><td><code class="text-caption">{{ parsed.request.pool_id_bech32 }}</code></td></tr>
+      </tbody></v-table>
+      <div class="text-caption text-medium-emphasis mb-1">Canonical body (exactly what is signed)</div>
+      <pre style="max-height: 280px; overflow: auto; white-space: pre-wrap; word-break: break-all; font-family: monospace; font-size: 0.72rem; margin: 0 0 0.75rem 0; color: rgba(255,255,255,0.8);">{{ parsed.request.canonical_body }}</pre>
+      <div class="d-flex justify-end mt-3" style="gap: 0.5rem;">
+        <v-btn variant="text" prepend-icon="mdi-close" @click="cancelParse">Cancel</v-btn>
+        <v-btn color="primary" :loading="signing" prepend-icon="mdi-key-variant" @click="confirmAndSign">Confirm and sign</v-btn>
+      </div>
+    </v-card-text>
+  </v-card>
+
   <v-card v-if="signError" class="mb-4">
     <v-card-text>
       <v-alert type="error" density="compact" variant="tonal">{{ signError }}</v-alert>
@@ -542,6 +561,7 @@ import type {
   PoolUpdateRequest,
   VoteChoice,
   VoteRequest,
+  SpoWitnessRequest,
 } from '@spo-tools/shared-frontend/types/wire'
 
 type ParsedRequest =
@@ -551,6 +571,7 @@ type ParsedRequest =
   | { kind: 'drep-delegation'; request: DRepDelegationRequest }
   | { kind: 'pool-update'; request: PoolUpdateRequest }
   | { kind: 'vote'; request: VoteRequest }
+  | { kind: 'witness-doc'; request: SpoWitnessRequest }
 
 function formatDrepChoice(c: DRepChoice): string {
   if (c.kind === 'abstain') return 'Abstain (always-abstain DRep)'

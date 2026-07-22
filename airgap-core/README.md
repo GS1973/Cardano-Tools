@@ -1,6 +1,6 @@
 # airgap-core
 
-Role-neutral core shared by the Cardano air-gapped tooling — SPO Tools,
+Role-neutral core shared by the Cardano air-gapped tooling, SPO Tools,
 DRep Tools, and Wallet Tools. It holds the transport and the Cardano
 primitives that every tool reuses, so each tool's online client and
 offline signer speak the same wire format and validate transactions the
@@ -11,14 +11,14 @@ crates.io.
 
 ## What it provides
 
-- **Air-gapped transport** — QR / UR fragment codec (`qr`), framed
+- **Air-gapped transport**: QR / UR fragment codec (`qr`), framed
   reader-writer I/O (`wire_io`), and the online-to-signer pairing channel
   (`pairing`, `crypto`, `csrf`, `pin`).
-- **Cardano primitives** — key loading (`cardano_keys`), transaction
+- **Cardano primitives**: key loading (`cardano_keys`), transaction
   assembly and body validation (`tx`, `validate`, `witness`), assets and
   UTxOs (`asset`, `utxo`), chain context and asset fingerprints
   (`chain_context`, `fingerprint`).
-- **Frontend types** — the `@airgap-core/frontend` TypeScript package
+- **Frontend types**: the `@airgap-core/frontend` TypeScript package
   re-exports the shared wire types so the web front ends stay in lockstep
   with the Rust definitions.
 
@@ -33,4 +33,4 @@ at your option.
 
 ## Author
 
-Smit Blockchain Operations (Pool BKIND) — <developmentbkind@gmail.com>
+Smit Blockchain Operations (Pool BKIND), <developmentbkind@gmail.com>

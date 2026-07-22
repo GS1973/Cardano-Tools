@@ -3,23 +3,25 @@
 Cardano Stake Pool Operator management toolkit. Air-gapped signer plus
 online coordinator, with QR/UR fragments crossing the boundary so the
 skeys never touch the network. Each side runs a local web UI in
-your browser — no CLI flags, no Haskell, no Plutus knowledge needed.
+your browser, no CLI flags, no Haskell, no Plutus knowledge needed.
 
 Self-hosted, open source, Linux-only. No Docker, no SaaS, no mobile apps.
 
 ## Status
 
-**v1.0.0** — production-ready. Six operational features, body-level
-validation on the signer, and an end-to-end encrypted channel between
-online tool and signer. All six features validated on Cardano mainnet
-against a live stake pool.
+**v1.1.0**: production-ready. Six operational features plus a
+rationale-witness step, body-level validation on the signer, and an
+end-to-end encrypted channel between online tool and signer. The six
+operational features are validated on Cardano mainnet against a live
+stake pool; the rationale-witness step is verified at component level,
+with a live vote carrying a witnessed rationale the remaining check.
 
 ## Screenshots
 
-A full leaderlog round-trip across the air-gap — from the online coordinator to the
+A full leaderlog round-trip across the air-gap, from the online coordinator to the
 air-gapped signer and back. Every field is shown on the signer before anything is signed.
 
-**Online client — build the leaderlog request**
+**Online client, build the leaderlog request**
 
 ![Online client building a leaderlog request as an animated QR and UR fragments](docs/screenshots/01-online-leaderlog-request.jpg)
 
@@ -27,46 +29,52 @@ air-gapped signer and back. Every field is shown on the signer before anything i
 
 ![The request QR enlarged for scanning](docs/screenshots/02-request-qr-enlarged.jpg)
 
-**Air-gapped signer — review and sign**
+**Air-gapped signer, review and sign**
 
 ![Air-gapped signer showing the leader-schedule computation preview before signing](docs/screenshots/03-signer-preview-and-sign.jpg)
 
-**Signer — signed result returned across the boundary**
+**Signer, signed result returned across the boundary**
 
 ![Signer showing the signed result as a QR and UR fragments](docs/screenshots/04-signer-result.jpg)
 
-**Online client — the computed leader schedule**
+**Online client, the computed leader schedule**
 
 ![Online client rendering the leader schedule with slots and times](docs/screenshots/05-online-leaderlog-schedule.jpg)
 
 ## Features
 
-- **Leaderlog** — Praos VRF block-schedule prediction. Automatic
+- **Leaderlog**: Praos VRF block-schedule prediction. Automatic
   fallback to the current epoch when the next-epoch nonce has not yet
   been finalised by the protocol's stability window.
-- **KES rotation** — fresh Sum6Kes keypair, operational certificate
+- **KES rotation**: fresh Sum6Kes keypair, operational certificate
   built and signed by the cold key, three `cardano-cli`-compatible
   envelope files (`kes.skey`, `node.cert`, `cold.counter`) ready for
   deployment to the block producer node.
-- **Reward withdrawal** — Conway-era stake withdrawal with payment
+- **Reward withdrawal**: Conway-era stake withdrawal with payment
   plus owner-stake witnesses, fee in lovelace, change to payment
   address.
-- **DRep delegation** — Abstain / No-Confidence / specific DRep,
+- **DRep delegation**: Abstain / No-Confidence / specific DRep,
   required so reward withdrawal stays valid under Conway's
   `ConwayWdrlNotDelegatedToDRep` rule.
-- **Pool parameter updates** — full re-registration covering pledge,
+- **Pool parameter updates**: full re-registration covering pledge,
   margin, fixed cost, reward account, owner stake keys, relays and
   metadata. Pre-submit pledge-vs-owner-stake check warns when the
   active stake snapshot may not yet meet a raised pledge. On-chain
   pending-update detection so the operator sees what will activate
   on the next epoch boundary.
-- **SPO governance vote** — cast a Yes / No / Abstain vote on an open
+- **SPO governance vote**: cast a Yes / No / Abstain vote on an open
   Conway governance action with the pool's full stake weight. Signed by
   the **cold key**; the signer additionally checks that the cold
   verification key hashes to the voted pool id. Optional CIP-136
   rationale anchor.
+- **Rationale witness (CIP-136)**: a separate step, not a transaction.
+  The online tool canonicalises a hand-authored rationale body (URDNA2015,
+  per CIP-100); the signer signs its blake2b-256 with the **cold key** and
+  the tool injects the CIP-100 author witness, so the vote's anchor renders
+  as a proper rationale instead of raw JSON. The signer refuses to sign
+  anything that is not a canonical governance-metadata body.
 
-In addition to the six operational features, the channel between
+In addition to these features, the channel between
 online tool and signer is **end-to-end encrypted**. After a one-time
 visual-fingerprint pairing, every QR / UR payload is sealed with
 X25519 + XChaCha20-Poly1305. A passive observer of the QR channel
@@ -81,7 +89,7 @@ integrations and tests can dispatch on the stable `code` instead of
 parsing free-form text.
 
 Both `spo-tools-online` and `spo-tools-signer` ship as single
-self-contained binaries — the Vue frontend is embedded via
+self-contained binaries, the Vue frontend is embedded via
 `rust-embed`. Copy the binary anywhere and run.
 
 ## Supported key formats
@@ -89,17 +97,17 @@ self-contained binaries — the Vue frontend is embedded via
 Two `cardano-cli` signing-key forms are accepted for the **payment** and
 **stake** keys:
 
-- **Plain Ed25519** — `PaymentSigningKeyShelley_ed25519` /
+- **Plain Ed25519**: `PaymentSigningKeyShelley_ed25519` /
   `StakeSigningKeyShelley_ed25519`, as produced by `cardano-cli address
   key-gen` and `stake-address key-gen`.
-- **Extended BIP32-Ed25519** —
+- **Extended BIP32-Ed25519**:
   `PaymentExtendedSigningKeyShelley_ed25519_bip32` /
   `StakeExtendedSigningKeyShelley_ed25519_bip32`. This is what a
   mnemonic-wallet owner (Eternl, Lace, Yoroi, …) gets by exporting the
   recovery phrase with `cardano-address` (standard CIP-1852 path) and
   converting with `cardano-cli key convert-cardano-address-key`. The
   signer detects the extended form automatically and signs scalar-based
-  — it never treats an extended key as a 32-byte seed, which would
+ , it never treats an extended key as a 32-byte seed, which would
   derive a different key and a different address. On load it cross-checks
   the public key embedded in the skey envelope against the one derived
   from the secret.
@@ -111,18 +119,16 @@ cardano-cli formats.
 
 Hardware wallets (Ledger, Trezor) are not supported.
 
-## Limitations (v1.0)
+## Limitations (v1.1)
 
-- Linux, x86-64 and arm64. For x86-64, prebuilt binaries ship in two builds: a standard
-  **glibc** build (modern distributions — glibc >= 2.34: Ubuntu 22.04+,
+- Linux, x86-64. Prebuilt binaries ship in two builds: a standard
+  **glibc** build (modern distributions, glibc >= 2.34: Ubuntu 22.04+,
   Debian 12+, Fedora 35+, RHEL/Rocky/Alma 9+, Arch, recent openSUSE) and
   a fully static **musl** build (`-musl`) that runs on any x86-64 Linux,
   including older LTS releases, Alpine, and minimal/live environments.
-  Use `-musl` if the standard build reports `GLIBC_x.xx not found`. For arm64
-  (Raspberry Pi 3/4/5, Zero 2, and other 64-bit ARM boards on a 64-bit OS), a
-  fully static **`-arm64`** build is provided.
+  Use `-musl` if the standard build reports `GLIBC_x.xx not found`.
 
-Single-pool operators only — by design, not a missing feature. Multi-pool
+Single-pool operators only, by design, not a missing feature. Multi-pool
 operation concentrates stake and works against the decentralisation this tool
 exists to support, so it is deliberately out of scope.
 
@@ -140,8 +146,8 @@ Both addresses are controlled by the same `payment.skey`. The pool's
 pledge sits at the base-form address; day-to-day fee UTxOs may live
 at either form depending on how cardano-cli wallets were created.
 
-This shared-key setup means a compromised online tool — even with the
-signer's body validator in place — could in principle build a
+This shared-key setup means a compromised online tool, even with the
+signer's body validator in place, could in principle build a
 withdrawal whose inputs come from the *pledged* base-form address
 instead of the enterprise address you intend, draining the pledge.
 The signer is air-gapped and cannot see on-chain UTxO ownership, so
@@ -159,7 +165,7 @@ by the recommended setup below:
 
 A fully-compromised online tool can report *consistent but false* input
 addresses, so neither the validator nor an operator reading the on-screen
-details can catch the lie on its own — the signer cannot see on-chain
+details can catch the lie on its own, the signer cannot see on-chain
 UTxO ownership. The fund-safety guarantee therefore rests on the setup
 below, which removes the lie's leverage entirely:
 
@@ -198,12 +204,12 @@ detecting that separation.
 
 ## Workspace layout
 
-- `shared/` — types and traits used by both binaries
-- `shared-frontend/` — Vue components, stores, formatters used by both UIs
-- `online-tool/` — internet-connected coordinator (Axum + Pallas)
-- `signer/` — air-gapped signer (Pallas, no network)
+- `shared/`, types and traits used by both binaries
+- `shared-frontend/`, Vue components, stores, formatters used by both UIs
+- `online-tool/`, internet-connected coordinator (Axum + Pallas)
+- `signer/`, air-gapped signer (Pallas, no network)
 
-All build on the sibling **`airgap-core`** crate — the role-neutral air-gap
+All build on the sibling **`airgap-core`** crate, the role-neutral air-gap
 transport (X25519 + XChaCha20-Poly1305, UR/QR, pairing, PIN) and Cardano
 primitives (tx assembly, body validation, key loading) shared with DRep
 Tools and Wallet Tools. Check it out next to this repo:
@@ -281,7 +287,7 @@ The Setup form has an optional Koios API key field. The key is read at
 startup and attached as `Authorization: Bearer <key>` to every Koios
 request (raises Koios's free-tier limit from 5 000 to 50 000 requests
 per day). Adding or changing the key via Setup persists it to the
-config file but does not rebuild the running HTTP client — restart the
+config file but does not rebuild the running HTTP client, restart the
 online tool for the new key to take effect on subsequent calls.
 
 ### Signer (air-gapped machine)
@@ -296,7 +302,7 @@ then:
 
 Acknowledge the air-gap reminder, open the URL printed at startup and
 configure the file paths to your VRF, cold, owner-stake, reward-stake
-and payment signing keys. Keys are read from disk on every sign — kept
+and payment signing keys. Keys are read from disk on every sign, kept
 in memory only for the duration of the operation.
 
 ### Pair the two sides (one-time, ~1 min)
@@ -312,14 +318,14 @@ signer. Operational features refuse to run before pairing is complete.
 
 Most features build, sign and submit a transaction and follow the same
 five-step shape. Two do not: **Leaderlog** only predicts your
-block-production schedule — nothing is signed or submitted — and **KES
+block-production schedule, nothing is signed or submitted, and **KES
 rotation** returns downloadable key and certificate files to deploy to
 your node instead of submitting a transaction. For the transaction
 features the shape is:
 
 1. Fill in the form on the online client and click **Send to Signer**.
    A confirmation modal opens summarising the operation and asking for
-   a 4-digit **operator PIN**. Pick any 4 digits — you will retype the
+   a 4-digit **operator PIN**. Pick any 4 digits, you will retype the
    same PIN on the signer screen in step 3.
 2. The online client builds the request, encrypts it (X25519 +
    XChaCha20-Poly1305), and shows it as an animated QR plus a list of
@@ -342,14 +348,14 @@ as text.
 `node.cert` and `cold.counter`. Deploy `kes.skey` and `node.cert` to your
 block-producer node and restart it; keep `cold.counter` with your
 cold-key backups. Rotate before the current operational certificate's
-KES-period window expires — the KES Rotation page shows a live countdown.
+KES-period window expires, the KES Rotation page shows a live countdown.
 Immediately after a rotation the on-chain op-cert counter trails your
 local record by one until the pool mints its next block, which is
 expected.
 
 ## Maintainer
 
-Smit Blockchain Operations (Pool BKIND) — <developmentbkind@gmail.com>
+Smit Blockchain Operations (Pool BKIND), <developmentbkind@gmail.com>
 
 ## Support this work
 
@@ -379,15 +385,15 @@ You alone are responsible for:
 - the outcome of any transaction you sign and submit.
 
 To the fullest extent permitted by law, the author accepts no liability for
-any loss or damage — including loss of funds, keys, rewards, or pool
-operation — arising from the use of, or inability to use, this software. Use
+any loss or damage, including loss of funds, keys, rewards, or pool
+operation, arising from the use of, or inability to use, this software. Use
 it at your own risk.
 
 Nothing here is financial, tax, or legal advice. Always confirm against the
 on-chain state and your own records.
 
 This is open source so that you never have to take it on trust. In case of
-any doubt, read the source — or have someone you trust check it for you —
+any doubt, read the source, or have someone you trust check it for you,
 before you rely on it.
 
 ## License

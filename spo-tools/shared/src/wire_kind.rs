@@ -19,6 +19,7 @@ pub enum WireKind {
     DrepDelegation,
     PoolUpdate,
     Vote,
+    WitnessDoc,
 }
 
 impl WireKind {
@@ -37,6 +38,7 @@ impl WireKind {
             WireKind::DrepDelegation => "drep_delegation",
             WireKind::PoolUpdate => "pool_update",
             WireKind::Vote => "vote",
+            WireKind::WitnessDoc => "witness_doc",
         }
     }
 }
@@ -67,6 +69,7 @@ mod tests {
             WireKind::DrepDelegation,
             WireKind::PoolUpdate,
             WireKind::Vote,
+            WireKind::WitnessDoc,
         ] {
             let json = serde_json::to_string(&k).expect("serialize");
             let back: WireKind = serde_json::from_str(&json).expect("deserialize");
@@ -100,6 +103,10 @@ mod tests {
             serde_json::to_string(&WireKind::Vote).unwrap(),
             "\"vote\""
         );
+        assert_eq!(
+            serde_json::to_string(&WireKind::WitnessDoc).unwrap(),
+            "\"witness_doc\""
+        );
     }
 
     #[test]
@@ -117,6 +124,7 @@ mod tests {
             WireKind::DrepDelegation,
             WireKind::PoolUpdate,
             WireKind::Vote,
+            WireKind::WitnessDoc,
         ] {
             let serde_form = serde_json::to_string(&k).unwrap();
             // serde wraps in quotes

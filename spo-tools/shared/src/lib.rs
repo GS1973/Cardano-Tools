@@ -41,6 +41,7 @@ pub mod praos;
 pub mod tx_validator;
 pub mod vote;
 pub mod wire_kind;
+pub mod witness_doc;
 pub mod withdrawal;
 
 #[cfg(test)]

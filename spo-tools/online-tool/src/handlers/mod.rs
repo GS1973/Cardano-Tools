@@ -8,4 +8,5 @@ pub mod kes;
 pub mod withdraw;
 pub mod drep;
 pub mod vote;
+pub mod witness;
 pub mod pool;

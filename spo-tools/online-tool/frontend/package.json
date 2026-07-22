@@ -1,6 +1,6 @@
 {
   "name": "spo-tools-frontend",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "author": "Smit Blockchain Operations (Pool BKIND) <developmentbkind@gmail.com>",
   "type": "module",
@@ -15,6 +15,7 @@
     "@airgap-core/frontend": "file:../../../airgap-core/frontend",
     "@mdi/font": "^7.4.0",
     "@spo-tools/shared-frontend": "*",
+    "jsonld": "^8.3.2",
     "html5-qrcode": "^2.3.8",
     "pinia": "^3.0.4",
     "qrcode": "^1.5.4",

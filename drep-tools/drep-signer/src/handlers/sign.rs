@@ -9,7 +9,7 @@
 use crate::{config, state};
 use crate::sign_core::{
     load_drep_material_from_path, load_payment_material_from_path, sign_register_core,
-    sign_retire_core, sign_update_core, sign_vote_core, SignExecuteError,
+    sign_retire_core, sign_update_core, sign_vote_core, sign_witness_core, SignExecuteError,
 };
 use shared::error::ErrorEnvelope;
 use shared::wire_io::{ur_decode_required, ur_encode};
@@ -29,6 +29,7 @@ pub(crate) enum ParsedRequest {
     DrepUpdate { request: shared::update::DRepUpdateRequest },
     DrepRetire { request: shared::retire::DRepRetireRequest },
     DrepVote { request: shared::vote::DRepVoteRequest },
+    DrepWitness { request: shared::witness_doc::DRepWitnessRequest },
 }
 
 #[derive(serde::Serialize)]
@@ -67,6 +68,9 @@ pub(crate) async fn sign_receive(
         },
         DrepWireKind::DrepVote => ParsedRequest::DrepVote {
             request: decode_typed(&json_bytes, "drep-vote")?,
+        },
+        DrepWireKind::DrepWitnessDoc => ParsedRequest::DrepWitness {
+            request: decode_typed(&json_bytes, "drep-witness")?,
         },
     };
     Ok(axum::Json(SignReceiveResponse { request: parsed, request_fingerprint }))
@@ -299,6 +303,20 @@ pub(crate) async fn sign_execute(
             let chain_context = req.chain_context;
             let result = sign_vote_core(&req, payment, drep)?;
             build_response(&result, chain_context, "drep-vote", &own_sk, &peer_pk, &req_id, now)
+        }
+        DrepWireKind::DrepWitnessDoc => {
+            let mut req: shared::witness_doc::DRepWitnessRequest =
+                decode_typed(&payload, "drep-witness")?;
+            let pin_proof = std::mem::take(&mut req.operator_pin_proof);
+            let body_fp = shared::request_body_fp(&req);
+            let _claim = assert_authorized(
+                &body.pin, req.kind, &pin_proof, &req.chain_context, &body_fp, &req_id, now,
+            )?;
+            let drep_path = cfg.drep_skey.clone().ok_or(SignExecuteError::DrepNotConfigured)?;
+            let drep = load_drep_material_from_path(std::path::Path::new(&drep_path))?;
+            let chain_context = req.chain_context;
+            let result = sign_witness_core(&req, drep)?;
+            build_response(&result, chain_context, "drep-witness", &own_sk, &peer_pk, &req_id, now)
         }
     }
 }

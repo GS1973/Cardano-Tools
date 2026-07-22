@@ -192,6 +192,61 @@ fn build_vkey_witness(
     Ok(VkeyWitness { role, vkey_hex, signature_hex })
 }
 
+/// Sign a 32-byte payload hash with `material`, returning (vkey, signature).
+/// Shared by the transaction witnesses and the CIP-100 rationale witness.
+fn sign_hash(
+    material: &SigningKeyMaterial,
+    hash: &[u8; 32],
+) -> Result<([u8; 32], [u8; 64]), SignExecuteError> {
+    match material {
+        SigningKeyMaterial::Plain(seed) => {
+            let sk = SigningKey::from_bytes(seed);
+            Ok((sk.verifying_key().to_bytes(), sk.sign(hash).to_bytes()))
+        }
+        SigningKeyMaterial::Extended { esk, expected_pubkey } => {
+            let sk = SecretKeyExtended::from_bytes(**esk).map_err(|_| {
+                SignExecuteError::WrongRole(
+                    "extended key failed Ed25519-BIP32 structure check".into(),
+                )
+            })?;
+            let derived = sk.public_key();
+            if derived.as_ref() != expected_pubkey.as_slice() {
+                return Err(SignExecuteError::WrongRole("extended key public-key drift".into()));
+            }
+            let mut vkey = [0u8; 32];
+            vkey.copy_from_slice(derived.as_ref());
+            let mut sig = [0u8; 64];
+            sig.copy_from_slice(sk.sign(hash).as_ref());
+            Ok((vkey, sig))
+        }
+    }
+}
+
+/// Produce a CIP-100 author witness over a governance-metadata canonical
+/// body. Refuses unless the payload is a canonical N-Quads body (never a
+/// transaction body) and the DRep key hashes to the request's DRep id, so
+/// the witness publicKey is verifiably the operator's DRep.
+pub(crate) fn sign_witness_core(
+    req: &shared::witness_doc::DRepWitnessRequest,
+    drep_material: SigningKeyMaterial,
+) -> Result<shared::witness_doc::DRepWitnessResult, SignExecuteError> {
+    shared::validate::assert_canonical_body_nquads(req.canonical_body.as_bytes())
+        .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))?;
+    let drep_vkey = drep_material.verifying_key()?;
+    shared::tx_validator::assert_drep_vkey_matches_id(&req.drep_id_bech32, &drep_vkey)
+        .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))?;
+    let body_hash = shared::validate::blake2b256(req.canonical_body.as_bytes());
+    let (vkey, sig) = sign_hash(&drep_material, &body_hash)?;
+    Ok(shared::witness_doc::DRepWitnessResult {
+        body_hash_hex: hex::encode(body_hash),
+        witness: shared::witness_doc::Cip100Witness {
+            witness_algorithm: "ed25519".to_string(),
+            public_key_hex: hex::encode(vkey),
+            signature_hex: hex::encode(sig),
+        },
+    })
+}
+
 fn body_hash_of(cbor_hex: &str) -> Result<(Vec<u8>, [u8; 32]), SignExecuteError> {
     use blake2::digest::{Update, VariableOutput};
     let body_bytes = hex::decode(cbor_hex).map_err(|e| SignExecuteError::BadCborHex(e.to_string()))?;
@@ -461,5 +516,76 @@ mod tests {
         load_payment_material_from_path(pay.path()).expect("loads payment key");
         // A payment key in the DRep slot is rejected.
         assert!(load_drep_material_from_path(pay.path()).is_err());
+    }
+
+    fn witness_ctx() -> ChainContext {
+        ChainContext {
+            current_epoch: 1,
+            current_slot: 100,
+            current_kes_period: 0,
+            epoch_ends_at_unix: 0,
+            opcert_expires_at_unix: None,
+            built_at_unix: 0,
+        }
+    }
+
+    #[test]
+    fn witness_over_canonical_body_verifies_and_binds_drep() {
+        let seed = [5u8; 32];
+        let (drep_id, _kh) = drep_id_for(&seed);
+        let body = "_:c14n0 <https://example.com/#body> _:c14n1 .\n\
+            _:c14n1 <https://example.com/#comment> \"hi\"@en-us .\n";
+        let req = shared::witness_doc::DRepWitnessRequest {
+            kind: shared::wire_kind::DrepWireKind::DrepWitnessDoc,
+            canonical_body: body.to_string(),
+            drep_id_bech32: drep_id,
+            operator_pin_proof: "0".repeat(16),
+            chain_context: witness_ctx(),
+        };
+        let res = sign_witness_core(&req, plain(seed)).expect("signs witness");
+        assert_eq!(res.witness.witness_algorithm, "ed25519");
+        // The witness publicKey is the DRep vkey, and the signature verifies
+        // over the blake2b-256 of the exact canonical body.
+        assert_eq!(res.witness.public_key_hex, hex::encode(vkey_of(&seed)));
+        let hash = shared::validate::blake2b256(body.as_bytes());
+        let vk = VerifyingKey::from_bytes(
+            &<[u8; 32]>::try_from(hex::decode(&res.witness.public_key_hex).unwrap()).unwrap(),
+        )
+        .unwrap();
+        let sig = Signature::from_slice(&hex::decode(&res.witness.signature_hex).unwrap()).unwrap();
+        vk.verify(&hash, &sig).expect("witness verifies over body hash");
+    }
+
+    #[test]
+    fn witness_rejects_non_canonical_body() {
+        // A payload that is not a canonical N-Quads body must never be signed:
+        // the guard is what stops the DRep key becoming a tx-signing oracle.
+        let seed = [5u8; 32];
+        let (drep_id, _kh) = drep_id_for(&seed);
+        let req = shared::witness_doc::DRepWitnessRequest {
+            kind: shared::wire_kind::DrepWireKind::DrepWitnessDoc,
+            canonical_body: "this is not n-quads .\n".to_string(),
+            drep_id_bech32: drep_id,
+            operator_pin_proof: "0".repeat(16),
+            chain_context: witness_ctx(),
+        };
+        assert!(sign_witness_core(&req, plain(seed)).is_err());
+    }
+
+    #[test]
+    fn witness_rejects_wrong_drep_key() {
+        // The loaded key must hash to the DRep id in the request, else the
+        // witness publicKey would not be the operator's on-chain DRep.
+        let seed = [5u8; 32];
+        let (drep_id, _kh) = drep_id_for(&seed);
+        let body = "_:c14n0 <https://example.com/#body> _:c14n1 .\n";
+        let req = shared::witness_doc::DRepWitnessRequest {
+            kind: shared::wire_kind::DrepWireKind::DrepWitnessDoc,
+            canonical_body: body.to_string(),
+            drep_id_bech32: drep_id,
+            operator_pin_proof: "0".repeat(16),
+            chain_context: witness_ctx(),
+        };
+        assert!(sign_witness_core(&req, plain([0xEEu8; 32])).is_err());
     }
 }

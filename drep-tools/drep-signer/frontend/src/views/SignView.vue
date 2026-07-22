@@ -149,6 +149,24 @@
       </v-card-text>
     </v-card>
 
+    <!-- Preview: witness a rationale (CIP-100 author witness, not a tx) -->
+    <v-card v-if="parsed?.kind === 'drep-witness'" ref="previewCardEl" class="mb-4">
+      <v-card-text>
+        <h3 class="text-subtitle-1 mt-0 mb-2">Preview: Witness rationale (CIP-100)</h3>
+        <p class="text-body-2 text-medium-emphasis mb-3">
+          This produces a CIP-100 author witness over the canonical body below, NOT a transaction. The signer hashes the exact bytes shown (Blake2b-256) and signs with your DRep key; the key must hash to the DRep id below or the signer refuses.
+        </p>
+        <div class="field-stack">
+          <div class="field"><div class="field-label">Witness as DRep</div><div class="field-value"><code class="text-caption">{{ parsed.request.drep_id_bech32 }}</code></div></div>
+          <div class="field"><div class="field-label">Canonical body (exactly what is signed)</div><div class="field-value"><pre style="max-height: 280px; overflow: auto; white-space: pre-wrap; word-break: break-all; font-family: monospace; font-size: 0.72rem; margin: 0; color: rgba(255,255,255,0.8);">{{ parsed.request.canonical_body }}</pre></div></div>
+        </div>
+        <div class="d-flex justify-end mt-3" style="gap: 0.5rem;">
+          <v-btn variant="text" prepend-icon="mdi-close" @click="cancelParse">Cancel</v-btn>
+          <v-btn color="primary" :loading="signing" prepend-icon="mdi-key-variant" @click="confirmAndSign">Confirm and sign</v-btn>
+        </div>
+      </v-card-text>
+    </v-card>
+
     <v-card v-if="signError" class="mb-4"><v-card-text><v-alert type="error" density="compact" variant="tonal">{{ signError }}</v-alert></v-card-text></v-card>
 
     <v-card v-if="result" ref="resultCardEl" class="mb-4">
@@ -233,6 +251,7 @@ import type {
   DRepUpdateRequest,
   DRepRetireRequest,
   DRepVoteRequest,
+  DRepWitnessRequest,
   VoteChoice,
 } from '@drep-tools/shared-frontend/types/wire'
 
@@ -241,6 +260,7 @@ type ParsedRequest =
   | { kind: 'drep-update'; request: DRepUpdateRequest }
   | { kind: 'drep-retire'; request: DRepRetireRequest }
   | { kind: 'drep-vote'; request: DRepVoteRequest }
+  | { kind: 'drep-witness'; request: DRepWitnessRequest }
 
 function formatVote(v: VoteChoice): string {
   return v === 'yes' ? 'Yes' : v === 'no' ? 'No' : 'Abstain'

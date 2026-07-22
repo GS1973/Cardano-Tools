@@ -15,6 +15,7 @@ pub enum DrepWireKind {
     DrepUpdate,
     DrepRetire,
     DrepVote,
+    DrepWitnessDoc,
 }
 
 impl DrepWireKind {
@@ -27,6 +28,7 @@ impl DrepWireKind {
             DrepWireKind::DrepUpdate => "drep_update",
             DrepWireKind::DrepRetire => "drep_retire",
             DrepWireKind::DrepVote => "drep_vote",
+            DrepWireKind::DrepWitnessDoc => "drep_witness_doc",
         }
     }
 }
@@ -55,6 +57,7 @@ mod tests {
             DrepWireKind::DrepUpdate,
             DrepWireKind::DrepRetire,
             DrepWireKind::DrepVote,
+            DrepWireKind::DrepWitnessDoc,
         ] {
             let json = serde_json::to_string(&k).expect("serialize");
             let back: DrepWireKind = serde_json::from_str(&json).expect("deserialize");
@@ -69,6 +72,7 @@ mod tests {
             DrepWireKind::DrepUpdate,
             DrepWireKind::DrepRetire,
             DrepWireKind::DrepVote,
+            DrepWireKind::DrepWitnessDoc,
         ] {
             let serde_form = serde_json::to_string(&k).unwrap();
             assert_eq!(serde_form, format!("\"{}\"", k.wire_str()));

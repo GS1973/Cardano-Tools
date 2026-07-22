@@ -396,6 +396,32 @@ pub(crate) fn sign_vote_core(
     })
 }
 
+/// Produce a CIP-100 author witness over a governance-metadata canonical
+/// body, signed by the pool cold key. Refuses unless the payload is a
+/// canonical N-Quads body (never a transaction body) and the cold key hashes
+/// to the request's pool id, so the witness publicKey is verifiably the
+/// operator's pool.
+pub(crate) fn sign_witness_core(
+    req: &shared::witness_doc::SpoWitnessRequest,
+    cold_seed: Zeroizing<[u8; 32]>,
+) -> Result<shared::witness_doc::SpoWitnessResult, SignExecuteError> {
+    shared::validate::assert_canonical_body_nquads(req.canonical_body.as_bytes())
+        .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))?;
+    let cold_vkey = SigningKey::from_bytes(&cold_seed).verifying_key().to_bytes();
+    shared::tx_validator::assert_cold_vkey_matches_pool(&req.pool_id_bech32, &cold_vkey)
+        .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))?;
+    let body_hash = shared::validate::blake2b256(req.canonical_body.as_bytes());
+    let sig = SigningKey::from_bytes(&cold_seed).sign(&body_hash);
+    Ok(shared::witness_doc::SpoWitnessResult {
+        body_hash_hex: hex::encode(body_hash),
+        witness: shared::witness_doc::Cip100Witness {
+            witness_algorithm: "ed25519".to_string(),
+            public_key_hex: hex::encode(cold_vkey),
+            signature_hex: hex::encode(sig.to_bytes()),
+        },
+    })
+}
+
 pub(crate) fn compute_leaderlog_core(
     req: &shared::leaderlog::LeaderlogRequest,
     vrf_skey: &SecretKey03,
@@ -1178,5 +1204,65 @@ mod tests {
         for name in ["kes.skey", "node.cert", "cold.counter"] {
             assert!(!dir.path().join(name).exists(), "{name} must not exist");
         }
+    }
+
+    fn witness_ctx() -> shared::chain_context::ChainContext {
+        shared::chain_context::ChainContext {
+            current_epoch: 100,
+            current_slot: 1_000_000,
+            current_kes_period: 1180,
+            epoch_ends_at_unix: 0,
+            opcert_expires_at_unix: None,
+            built_at_unix: 0,
+        }
+    }
+
+    #[test]
+    fn witness_over_canonical_body_verifies_and_binds_pool() {
+        use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+        let body = "_:c14n0 <https://example.com/#body> _:c14n1 .\n_:c14n1 <https://example.com/#comment> \"hi\"@en-us .\n";
+        let req = shared::witness_doc::SpoWitnessRequest {
+            kind: shared::wire_kind::WireKind::WitnessDoc,
+            canonical_body: body.to_string(),
+            pool_id_bech32: TEST_POOL_ID.into(),
+            operator_pin_proof: "0".repeat(16),
+            chain_context: witness_ctx(),
+        };
+        let res = sign_witness_core(&req, Zeroizing::new(TEST_COLD_SEED)).expect("signs witness");
+        assert_eq!(res.witness.witness_algorithm, "ed25519");
+        let cold_vkey = SigningKey::from_bytes(&TEST_COLD_SEED).verifying_key().to_bytes();
+        assert_eq!(res.witness.public_key_hex, hex::encode(cold_vkey));
+        let hash = shared::validate::blake2b256(body.as_bytes());
+        let vk = VerifyingKey::from_bytes(
+            &<[u8; 32]>::try_from(hex::decode(&res.witness.public_key_hex).unwrap()).unwrap(),
+        )
+        .unwrap();
+        let sig = Signature::from_slice(&hex::decode(&res.witness.signature_hex).unwrap()).unwrap();
+        vk.verify(&hash, &sig).expect("witness verifies over body hash");
+    }
+
+    #[test]
+    fn witness_rejects_non_canonical_body() {
+        let req = shared::witness_doc::SpoWitnessRequest {
+            kind: shared::wire_kind::WireKind::WitnessDoc,
+            canonical_body: "this is not n-quads .\n".to_string(),
+            pool_id_bech32: TEST_POOL_ID.into(),
+            operator_pin_proof: "0".repeat(16),
+            chain_context: witness_ctx(),
+        };
+        assert!(sign_witness_core(&req, Zeroizing::new(TEST_COLD_SEED)).is_err());
+    }
+
+    #[test]
+    fn witness_rejects_wrong_cold_key() {
+        let body = "_:c14n0 <https://example.com/#body> _:c14n1 .\n";
+        let req = shared::witness_doc::SpoWitnessRequest {
+            kind: shared::wire_kind::WireKind::WitnessDoc,
+            canonical_body: body.to_string(),
+            pool_id_bech32: TEST_POOL_ID.into(),
+            operator_pin_proof: "0".repeat(16),
+            chain_context: witness_ctx(),
+        };
+        assert!(sign_witness_core(&req, Zeroizing::new([0xEEu8; 32])).is_err());
     }
 }

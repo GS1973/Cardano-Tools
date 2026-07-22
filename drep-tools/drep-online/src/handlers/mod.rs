@@ -5,3 +5,4 @@ pub mod retire;
 pub mod setup;
 pub mod update;
 pub mod vote;
+pub mod witness;

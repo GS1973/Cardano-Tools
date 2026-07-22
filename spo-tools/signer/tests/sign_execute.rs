@@ -45,6 +45,7 @@ use shared::leaderlog::LeaderlogRequest;
 use shared::pool_update::PoolUpdateRequest;
 use shared::vote::{VoteChoice, VoteRequest};
 use shared::wire_kind::WireKind;
+use shared::witness_doc::SpoWitnessRequest;
 use shared::withdrawal::WithdrawalRequest;
 
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -363,6 +364,16 @@ fn vote_request(built_at: u64) -> VoteRequest {
     }
 }
 
+fn witness_request(built_at: u64) -> SpoWitnessRequest {
+    SpoWitnessRequest {
+        kind: WireKind::WitnessDoc,
+        canonical_body: "_:c14n0 <https://example.com/#body> _:c14n1 .\n".into(),
+        pool_id_bech32: TEST_POOL_ID.into(),
+        operator_pin_proof: String::new(),
+        chain_context: fresh_chain_context(built_at),
+    }
+}
+
 async fn post_execute(port: u16, fragments: &[String], pin: &str) -> (u16, Value) {
     let r = reqwest::Client::new()
         .post(format!("http://127.0.0.1:{port}/api/sign/execute"))
@@ -477,6 +488,17 @@ async fn every_wire_kind_crosses_authorization_to_key_load() {
                 WireKind::Vote,
                 built_at,
                 vote_request(built_at),
+                |r, p| r.operator_pin_proof = p,
+            ),
+        ),
+        (
+            "witness-doc",
+            seal_request(
+                &keys,
+                "1234",
+                WireKind::WitnessDoc,
+                built_at,
+                witness_request(built_at),
                 |r, p| r.operator_pin_proof = p,
             ),
         ),

@@ -7,6 +7,7 @@ import SetupView from '../views/SetupView.vue'
 import WithdrawView from '../views/WithdrawView.vue'
 import DRepDelegationView from '../views/DRepDelegationView.vue'
 import GovernanceVoteView from '../views/GovernanceVoteView.vue'
+import RationaleView from '../views/RationaleView.vue'
 import PoolParamsView from '../views/PoolParamsView.vue'
 
 const router = createRouter({
@@ -41,6 +42,11 @@ const router = createRouter({
       path: '/vote',
       component: GovernanceVoteView,
       meta: { title: 'SPO vote', icon: 'mdi-gavel' },
+    },
+    {
+      path: '/rationale',
+      component: RationaleView,
+      meta: { title: 'Rationale', icon: 'mdi-file-sign' },
     },
     {
       path: '/pool-params',

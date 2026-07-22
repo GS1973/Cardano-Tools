@@ -42,6 +42,7 @@ pub mod update;
 pub mod vote;
 pub mod wire_kind;
 pub mod witness;
+pub mod witness_doc;
 
 #[cfg(test)]
 mod request_body_fp_tests {

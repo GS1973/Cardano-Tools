@@ -293,6 +293,58 @@ pub fn blake2b224(bytes: &[u8]) -> [u8; 28] {
     out
 }
 
+/// blake2b-256 (32-byte) digest: the Cardano metadata content-hash and the
+/// payload a CIP-100 author witness signs.
+pub fn blake2b256(bytes: &[u8]) -> [u8; 32] {
+    let mut hasher = Blake2bVar::new(32).expect("blake2b 256 init");
+    hasher.update(bytes);
+    let mut out = [0u8; 32];
+    hasher.finalize_variable(&mut out).expect("blake2b 256 fin");
+    out
+}
+
+/// Assert that `bytes` is a CIP-100 canonical body: the N-Quads
+/// serialization an author witness signs, and never a transaction body.
+///
+/// A CIP-100 author witness and a Cardano transaction witness are both an
+/// ed25519 signature over blake2b-256 of a byte string, produced by the same
+/// key. Without this guard a compromised online tool could hand the signer
+/// the CBOR of a malicious transaction body labelled as a canonical body and
+/// obtain a valid transaction witness. The load-bearing guarantee is the
+/// first-byte gate: an N-Quads document begins with a blank-node (`_`, 0x5F)
+/// or IRI (`<`, 0x3C) subject, both < 0x80, whereas a Conway
+/// `TransactionBody` is a CBOR map whose first byte is >= 0x80. That gate
+/// alone makes the two preimage spaces disjoint, reinforced structurally
+/// because `canonical_body` is a Rust `String` (valid UTF-8) whose leading
+/// byte can never be a 0x80-0xBF CBOR map header. The `decode_body` check
+/// below is defense-in-depth only and unreachable-by-design once the
+/// first-byte gate has passed; it must not be relied on alone. Forging a
+/// transaction witness this way therefore reduces to a blake2b-256 collision.
+pub fn assert_canonical_body_nquads(bytes: &[u8]) -> Result<(), ValidationError> {
+    if bytes.is_empty() {
+        return Err(ValidationError::Mismatch("canonical body is empty"));
+    }
+    match bytes[0] {
+        b'_' | b'<' => {}
+        _ => {
+            return Err(ValidationError::Mismatch(
+                "canonical body must begin with an N-Quads subject",
+            ))
+        }
+    }
+    if !bytes.ends_with(b".\n") && !bytes.ends_with(b" .") {
+        return Err(ValidationError::Mismatch(
+            "canonical body must end with an N-Quad statement",
+        ));
+    }
+    if decode_body(bytes).is_ok() {
+        return Err(ValidationError::Mismatch(
+            "canonical body decodes as a transaction body",
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

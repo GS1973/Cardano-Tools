@@ -10,7 +10,7 @@ use crate::sign_core::{
     SignExecuteError, compute_leaderlog_core, load_cold_seed_from_path,
     load_payment_material_from_path, load_stake_material_from_path,
     load_vrf_from_path, rotate_kes_core, sign_drep_delegation_core,
-    sign_pool_update_core, sign_vote_core, sign_withdrawal_core,
+    sign_pool_update_core, sign_vote_core, sign_witness_core, sign_withdrawal_core,
 };
 use shared::error::ErrorEnvelope;
 use shared::wire_io::{ur_decode_required, ur_encode};
@@ -48,6 +48,9 @@ pub(crate) enum ParsedRequest {
     },
     Vote {
         request: shared::vote::VoteRequest,
+    },
+    WitnessDoc {
+        request: shared::witness_doc::SpoWitnessRequest,
     },
 }
 
@@ -119,6 +122,12 @@ pub(crate) async fn sign_receive(
             request: serde_json::from_slice(&json_bytes).map_err(|e| {
                 tracing::error!(error = %e, kind = ?kind, "sign_receive: vote decode");
                 ErrorEnvelope::invalid("invalid vote payload")
+            })?,
+        },
+        WireKind::WitnessDoc => ParsedRequest::WitnessDoc {
+            request: serde_json::from_slice(&json_bytes).map_err(|e| {
+                tracing::error!(error = %e, kind = ?kind, "sign_receive: witness decode");
+                ErrorEnvelope::invalid("invalid witness payload")
             })?,
         },
     };
@@ -423,6 +432,20 @@ pub(crate) async fn sign_execute(
             let chain_context = req.chain_context;
             let result = sign_vote_core(&req, payment_seed, cold_seed)?;
             build_sign_response(&result, chain_context, "vote", &own_sk, &peer_pk, &req_id, now)
+        }
+        WireKind::WitnessDoc => {
+            let mut req: shared::witness_doc::SpoWitnessRequest =
+                decode_typed_request(&payload, "witness")?;
+            let pin_proof = std::mem::take(&mut req.operator_pin_proof);
+            let body_fp = shared::request_body_fp(&req);
+            let _claim = assert_request_authorized(
+                &body.pin, req.kind, &pin_proof, &req.chain_context, &body_fp, &req_id, now,
+            )?;
+            let cold_path = cfg.cold_skey.clone().ok_or(SignExecuteError::ColdNotConfigured)?;
+            let cold_seed = load_cold_seed_from_path(std::path::Path::new(&cold_path))?;
+            let chain_context = req.chain_context;
+            let result = sign_witness_core(&req, cold_seed)?;
+            build_sign_response(&result, chain_context, "witness", &own_sk, &peer_pk, &req_id, now)
         }
     }
 }
