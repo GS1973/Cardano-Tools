@@ -116,38 +116,18 @@
               weight (pledge + all delegators) in the SPO chamber.
             </p>
 
-            <h3 class="text-subtitle-1 mt-2 mb-2">Rationale (optional)</h3>
-            <p class="text-caption text-medium-emphasis mb-2">
-              Optionally attach a public rationale document: its URL plus the
-              32-byte blake2b-256 hash of its contents. Leave both empty for no
-              anchor. You host the document yourself (IPFS or your own site).
-            </p>
-            <v-text-field
-              v-model="anchorUrl"
-              label="Rationale URL"
-              placeholder="ipfs://…  or  https://…"
-              density="compact"
-              variant="outlined"
-              hide-details
-              class="mb-2"
-            />
-            <v-text-field
-              v-model="anchorHash"
-              label="Rationale hash (64 hex chars)"
-              placeholder="blake2b-256 of the document"
-              density="compact"
-              variant="outlined"
-              hide-details
-            />
-            <v-btn
-              size="small"
-              variant="outlined"
-              :loading="hashing"
-              :disabled="!anchorUrl.trim()"
-              prepend-icon="mdi-pound"
-              class="mt-2"
-              @click="computeHash"
-            >Compute hash</v-btn>
+            <h3 class="text-subtitle-1 mt-2 mb-2">Rationale (CIP-136, optional)</h3>
+            <template v-if="preview.manifest_base_url">
+              <p class="text-caption text-medium-emphasis mb-2">Enter just the file name; the on-chain URL is composed from your configured base. The hash is the blake2b-256 of the document's contents — host it first, then compute. Leave the file name empty for no anchor.</p>
+              <v-text-field v-model="manifestFile" label="Rationale file name" placeholder="rationale.jsonld" density="compact" variant="outlined" hide-details class="mb-2" />
+              <p v-if="composedManifestUrl" class="text-caption text-medium-emphasis mb-2">Full URL (goes on-chain): <code style="word-break: break-all;">{{ composedManifestUrl }}</code></p>
+              <div class="d-flex align-start" style="gap: 0.5rem;">
+                <v-text-field v-model="anchorHash" label="Rationale hash (64 hex chars)" placeholder="blake2b-256 of the document" density="compact" variant="outlined" hide-details />
+                <v-btn size="small" variant="outlined" :loading="hashing" :disabled="!composedManifestUrl" prepend-icon="mdi-pound" class="mt-1" @click="computeHash">Compute hash</v-btn>
+              </div>
+              <v-alert v-if="hashError" type="error" density="compact" variant="tonal" class="mt-2">{{ hashError }}</v-alert>
+            </template>
+            <v-alert v-else type="info" density="compact" variant="tonal">To attach a rationale, set a <strong>Manifest base URL</strong> in Setup first. You can vote without one.</v-alert>
           </template>
         </template>
       </v-card-text>
@@ -346,6 +326,7 @@ interface VotePreviewData {
   can_cover_fee: boolean
   proposals: VoteProposalSummary[]
   non_spo_open_count: number
+  manifest_base_url: string | null
 }
 interface SubmittedTx { tx_hash: string; explorer_url: string; signed_tx_size_bytes: number }
 
@@ -375,9 +356,15 @@ const notPaired = ref(false)
 
 const selectedIdx = ref<number | null>(null)
 const voteChoice = ref<VoteChoice>('yes')
-const anchorUrl = ref('')
+const manifestFile = ref('')
+const composedManifestUrl = computed(() => {
+  const base = (preview.value?.manifest_base_url || '').replace(/\/+$/, '')
+  const file = manifestFile.value.trim().replace(/^\/+/, '')
+  return base && file ? `${base}/${file}` : ''
+})
 const anchorHash = ref('')
 const hashing = ref(false)
+const hashError = ref<string | null>(null)
 
 const mode = ref<'idle' | 'send' | 'receive'>('idle')
 const starting = ref(false)
@@ -399,9 +386,10 @@ const finalSubmitting = ref(false)
 const notify = useNotificationStore()
 
 async function computeHash() {
-  const url = anchorUrl.value.trim()
+  const url = composedManifestUrl.value
   if (!url) return
   hashing.value = true
+  hashError.value = null
   try {
     const r = await fetch('/api/vote/rationale-hash', {
       method: 'POST',
@@ -409,11 +397,10 @@ async function computeHash() {
       body: JSON.stringify({ url }),
     })
     const d = await r.json()
-    if (d.status === 'error') { notify.error(d.message); return }
+    if (d.status === 'error') { hashError.value = d.message; return }
     anchorHash.value = d.hash_hex
-    notify.success(`Hash computed (${d.byte_len} bytes)`)
   } catch (e: unknown) {
-    notify.error(e instanceof Error ? e.message : String(e))
+    hashError.value = e instanceof Error ? e.message : String(e)
   } finally {
     hashing.value = false
   }
@@ -497,7 +484,7 @@ function onChoiceChanged() {
   mode.value = 'idle'
   stopCycle()
 }
-watch([selectedIdx, voteChoice, anchorUrl, anchorHash], onChoiceChanged)
+watch([selectedIdx, voteChoice, manifestFile, anchorHash], onChoiceChanged)
 
 function openConfirmSend() {
   confirmSendOpen.value = true
@@ -529,7 +516,7 @@ async function startVote(pin: string) {
         action_tx_hash: selectedProposal.value.action_tx_hash,
         action_index: selectedProposal.value.action_index,
         vote: voteChoice.value,
-        anchor_url: anchorUrl.value.trim() || null,
+        anchor_url: composedManifestUrl.value || null,
         anchor_hash: anchorHash.value.trim() || null,
       }),
     })

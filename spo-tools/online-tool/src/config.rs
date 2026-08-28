@@ -22,6 +22,11 @@ pub struct OnlineConfig {
     pub reward_receive_address: Option<String>,
     #[serde(default, deserialize_with = "shared::config_helpers::deserialize_empty_string_as_none")]
     pub koios_api_key: Option<String>,
+    /// Base URL where the operator hosts their rationale documents. The
+    /// governance-vote view composes the full anchor URL as `base + filename`,
+    /// so the operator only types the file name per rationale.
+    #[serde(default, deserialize_with = "shared::config_helpers::deserialize_empty_string_as_none")]
+    pub manifest_base_url: Option<String>,
 
     /// Hex-encoded X25519 secret key for the encrypted-channel layer.
     /// Generated locally on first boot, never leaves this machine.

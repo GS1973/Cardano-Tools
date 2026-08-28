@@ -130,6 +130,9 @@ pub(crate) struct VotePreview {
     /// ParameterChange — DRep/CC only).
     non_spo_open_count: usize,
     chain_context: ChainContext,
+    /// Operator's configured base URL for rationale documents, if any. The
+    /// vote view composes the full anchor URL as `base + filename`.
+    manifest_base_url: Option<String>,
 }
 
 pub(crate) async fn vote_preview(
@@ -192,6 +195,7 @@ pub(crate) async fn vote_preview(
         proposals,
         non_spo_open_count,
         chain_context,
+        manifest_base_url: cfg.manifest_base_url.clone(),
     }))
 }
 

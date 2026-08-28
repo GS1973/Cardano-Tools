@@ -85,6 +85,21 @@
           @blur="isFocused.reward_receive_address = false"
         />
 
+        <div class="text-caption text-medium-emphasis mb-1">
+          Base URL where you host rationale documents (e.g. https://yoursite/governance/). Optional; when set, the governance-vote view composes the anchor URL from this plus a file name.
+        </div>
+        <v-text-field
+          v-model="cfg.manifest_base_url"
+          label="Manifest base URL"
+          :placeholder="isFocused.manifest_base_url ? '' : 'https://…/'"
+          :error-messages="errors.manifest_base_url ? [errors.manifest_base_url] : []"
+          density="compact"
+          variant="outlined"
+          class="mb-3"
+          @focus="isFocused.manifest_base_url = true"
+          @blur="isFocused.manifest_base_url = false"
+        />
+
         <v-expansion-panels v-model="advancedOpen" class="mb-2" variant="accordion">
           <v-expansion-panel>
             <v-expansion-panel-title class="text-body-2">Advanced</v-expansion-panel-title>
@@ -190,6 +205,7 @@ interface OnlineConfig {
   payment_address: string | null
   reward_receive_address: string | null
   koios_api_key: string | null
+  manifest_base_url: string | null
 }
 
 interface ConfigStatusResponse {
@@ -199,6 +215,7 @@ interface ConfigStatusResponse {
   pool_id: string | null
   payment_address: string | null
   reward_receive_address: string | null
+  manifest_base_url: string | null
   has_koios_api_key: boolean
   // Present only on the POST response when the stored Koios API key just
   // changed: the backend's HTTP client bakes the Authorization header in
@@ -228,6 +245,7 @@ const cfg = reactive<OnlineConfig>({
   payment_address: null,
   reward_receive_address: null,
   koios_api_key: null,
+  manifest_base_url: null,
 })
 
 const errors = reactive<Record<keyof OnlineConfig, string | null>>({
@@ -235,6 +253,7 @@ const errors = reactive<Record<keyof OnlineConfig, string | null>>({
   payment_address: null,
   reward_receive_address: null,
   koios_api_key: null,
+  manifest_base_url: null,
 })
 
 const isFocused = reactive<Record<keyof OnlineConfig, boolean>>({
@@ -242,6 +261,7 @@ const isFocused = reactive<Record<keyof OnlineConfig, boolean>>({
   payment_address: false,
   reward_receive_address: false,
   koios_api_key: false,
+  manifest_base_url: false,
 })
 
 const locked = ref(false)
@@ -270,10 +290,12 @@ function clearForm() {
   cfg.payment_address = null
   cfg.reward_receive_address = null
   cfg.koios_api_key = null
+  cfg.manifest_base_url = null
   errors.pool_id = null
   errors.payment_address = null
   errors.reward_receive_address = null
   errors.koios_api_key = null
+  errors.manifest_base_url = null
   saveError.value = null
 }
 
@@ -290,6 +312,7 @@ function applyStatus(d: ConfigStatusResponse) {
   cfg.pool_id = d.pool_id
   cfg.payment_address = d.payment_address
   cfg.reward_receive_address = d.reward_receive_address
+  cfg.manifest_base_url = d.manifest_base_url
 }
 
 async function loadConfig() {

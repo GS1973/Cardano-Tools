@@ -25,6 +25,10 @@ pub(crate) struct OnlineConfigResponse {
     pub pool_id: Option<String>,
     pub payment_address: Option<String>,
     pub reward_receive_address: Option<String>,
+    /// Base URL the operator hosts rationale documents under; the
+    /// governance-vote view composes the full anchor URL from this plus a
+    /// file name.
+    pub manifest_base_url: Option<String>,
     /// Whether a Koios API key is stored. The key value itself is never
     /// returned (it is operator-secret, possibly billed).
     pub has_koios_api_key: bool,
@@ -50,6 +54,7 @@ fn build_response(cfg: &config::OnlineConfig) -> OnlineConfigResponse {
         pool_id: cfg.pool_id.clone(),
         payment_address: cfg.payment_address.clone(),
         reward_receive_address: cfg.reward_receive_address.clone(),
+        manifest_base_url: cfg.manifest_base_url.clone(),
         has_koios_api_key: cfg.koios_api_key.as_deref().map(|k| !k.is_empty()).unwrap_or(false),
         koios_api_key_restart_notice: None,
     }
@@ -64,7 +69,8 @@ pub(crate) struct OnlineConfigPostBody {
     pool_id: Option<String>,
     payment_address: Option<String>,
     reward_receive_address: Option<String>,
-    koios_api_key: Option<String>}
+    koios_api_key: Option<String>,
+    manifest_base_url: Option<String>}
 
 pub(crate) async fn online_config_post(
     State(state): State<Arc<AppState>>,
@@ -105,6 +111,14 @@ pub(crate) async fn online_config_post(
     let reward_receive_address = require_bech32_field("reward_receive_address", body.reward_receive_address.as_deref())?.to_string();
     let posted_koios = optional_field("koios_api_key", body.koios_api_key.as_deref(), MAX_KOIOS_API_KEY_LEN)?
         .map(str::to_string);
+    // Manifest base URL is optional; when present it must be an http(s) URL.
+    const MAX_URL_LEN: usize = 500;
+    let manifest_base_url: Option<String> =
+        match optional_field("manifest_base_url", body.manifest_base_url.as_deref(), MAX_URL_LEN)? {
+            Some(s) if s.starts_with("https://") || s.starts_with("http://") => Some(s.to_string()),
+            Some(_) => return Err(ErrorEnvelope::invalid("manifest_base_url must start with http:// or https://")),
+            None => None,
+        };
 
     config::validate_bech32(&pool_id, "pool")
         .map_err(|e| { error!(error = %e, "invalid pool_id"); ErrorEnvelope::invalid("invalid pool_id") })?;
@@ -144,6 +158,7 @@ pub(crate) async fn online_config_post(
         payment_address: Some(payment_address),
         reward_receive_address: Some(reward_receive_address),
         koios_api_key,
+        manifest_base_url,
         own_crypto_skey_hex: guard.own_crypto_skey_hex.clone(),
         peer_crypto_pubkey_hex: guard.peer_crypto_pubkey_hex.clone()};
 
