@@ -1093,7 +1093,7 @@ pub enum SubmitError {
 /// is reached. Unlike `Response::bytes`, which buffers the entire body
 /// into memory before returning, this bounds how much a misbehaving or
 /// malicious upstream can force the process to allocate.
-async fn read_capped(mut resp: reqwest::Response, max: usize) -> Result<Vec<u8>, reqwest::Error> {
+pub(crate) async fn read_capped(mut resp: reqwest::Response, max: usize) -> Result<Vec<u8>, reqwest::Error> {
     let mut buf = Vec::new();
     while let Some(chunk) = resp.chunk().await? {
         let remaining = max.saturating_sub(buf.len());

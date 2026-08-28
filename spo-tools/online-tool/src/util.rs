@@ -260,3 +260,78 @@ pub(crate) async fn submit_signed_tx(
         signed_tx_size_bytes: signed_tx.len(),
     })
 }
+
+
+// ---------------------------------------------------------------------------
+// Rationale anchor-hash helper. Ported from DRep Tools' manifest-hash handler
+// so the SPO vote view has the same "Compute hash" button: fetch the rationale
+// document at `url` and return the blake2b-256 of its raw bytes (the CIP-100
+// anchor hash). Hashes the document content, never the URL string.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+pub(crate) struct RationaleHashBody {
+    pub url: String,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub(crate) enum RationaleHashResponse {
+    Ok { hash_hex: String, byte_len: usize },
+    Error { message: String },
+}
+
+pub(crate) async fn rationale_hash_handler(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    axum::Json(body): axum::Json<RationaleHashBody>,
+) -> axum::Json<RationaleHashResponse> {
+    const MAX_RATIONALE_BYTES: usize = 1024 * 1024;
+    let url = body.url.trim();
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return axum::Json(RationaleHashResponse::Error {
+            message: "URL must start with http:// or https://".into(),
+        });
+    }
+    let resp = match state.http.get(url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            error!(error = %e, "rationale fetch failed");
+            return axum::Json(RationaleHashResponse::Error {
+                message: "could not fetch the rationale URL".into(),
+            });
+        }
+    };
+    if !resp.status().is_success() {
+        return axum::Json(RationaleHashResponse::Error {
+            message: format!("rationale URL returned HTTP {}", resp.status().as_u16()),
+        });
+    }
+    if resp
+        .content_length()
+        .map(|l| l as usize > MAX_RATIONALE_BYTES)
+        .unwrap_or(false)
+    {
+        return axum::Json(RationaleHashResponse::Error {
+            message: "rationale is larger than 1 MiB".into(),
+        });
+    }
+    let bytes = match koios::read_capped(resp, MAX_RATIONALE_BYTES + 1).await {
+        Ok(b) => b,
+        Err(e) => {
+            error!(error = %e, "rationale body read failed");
+            return axum::Json(RationaleHashResponse::Error {
+                message: "could not read the rationale body".into(),
+            });
+        }
+    };
+    if bytes.len() > MAX_RATIONALE_BYTES {
+        return axum::Json(RationaleHashResponse::Error {
+            message: "rationale is larger than 1 MiB".into(),
+        });
+    }
+    let hash = pallas_crypto::hash::Hasher::<256>::hash(&bytes);
+    axum::Json(RationaleHashResponse::Ok {
+        hash_hex: hex::encode(hash),
+        byte_len: bytes.len(),
+    })
+}

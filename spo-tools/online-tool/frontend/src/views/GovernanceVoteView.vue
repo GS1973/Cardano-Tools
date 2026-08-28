@@ -139,6 +139,15 @@
               variant="outlined"
               hide-details
             />
+            <v-btn
+              size="small"
+              variant="outlined"
+              :loading="hashing"
+              :disabled="!anchorUrl.trim()"
+              prepend-icon="mdi-pound"
+              class="mt-2"
+              @click="computeHash"
+            >Compute hash</v-btn>
           </template>
         </template>
       </v-card-text>
@@ -368,6 +377,7 @@ const selectedIdx = ref<number | null>(null)
 const voteChoice = ref<VoteChoice>('yes')
 const anchorUrl = ref('')
 const anchorHash = ref('')
+const hashing = ref(false)
 
 const mode = ref<'idle' | 'send' | 'receive'>('idle')
 const starting = ref(false)
@@ -387,6 +397,27 @@ const submitError = ref<string | null>(null)
 const finalSubmitting = ref(false)
 
 const notify = useNotificationStore()
+
+async function computeHash() {
+  const url = anchorUrl.value.trim()
+  if (!url) return
+  hashing.value = true
+  try {
+    const r = await fetch('/api/vote/rationale-hash', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    })
+    const d = await r.json()
+    if (d.status === 'error') { notify.error(d.message); return }
+    anchorHash.value = d.hash_hex
+    notify.success(`Hash computed (${d.byte_len} bytes)`)
+  } catch (e: unknown) {
+    notify.error(e instanceof Error ? e.message : String(e))
+  } finally {
+    hashing.value = false
+  }
+}
 
 const sendCardEl = ref<{ $el: HTMLElement } | null>(null)
 const receiveCardEl = ref<{ $el: HTMLElement; retry?: () => Promise<void> } | null>(null)

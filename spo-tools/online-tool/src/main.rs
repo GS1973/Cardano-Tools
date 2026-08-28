@@ -226,6 +226,7 @@ fn build_app(state: Arc<AppState>, listen_addr: SocketAddr) -> Router {
         .route("/api/vote/start", post(handlers::vote::vote_start))
         .route("/api/vote/result", post(handlers::vote::vote_result))
         .route("/api/vote/submit", post(util::submit_tx_handler))
+        .route("/api/vote/rationale-hash", post(util::rationale_hash_handler))
         .route("/api/witness/start", post(handlers::witness::witness_start))
         .route("/api/witness/result", post(handlers::witness::witness_result))
         .route("/api/pairing/info", get(handlers::pairing::pairing_info))
