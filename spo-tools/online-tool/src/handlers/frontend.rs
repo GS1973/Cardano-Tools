@@ -1,5 +1,9 @@
+use axum::{
+    body::Body,
+    http::{header, StatusCode, Uri},
+    response::Response,
+};
 use rust_embed::RustEmbed;
-use axum::{body::Body, http::{header, StatusCode, Uri}, response::Response};
 
 #[derive(RustEmbed)]
 #[folder = "frontend/dist/"]
@@ -30,4 +34,3 @@ pub(crate) async fn frontend_handler(uri: Uri) -> Response {
         .body(Body::from("Not found"))
         .unwrap()
 }
-

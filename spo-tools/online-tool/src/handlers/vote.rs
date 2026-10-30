@@ -1,18 +1,14 @@
 use crate::{
     koios, state, tx_builder,
     util::{chain_context_from, paired_keys_or_err, UtxoSummary, TTL_MARGIN_SLOTS},
-    AppState};
-use shared::{chain_context::ChainContext, wire_io::ur_decode_required};
-use shared::error::ErrorEnvelope;
+    AppState,
+};
 use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
+use shared::error::ErrorEnvelope;
+use shared::{chain_context::ChainContext, wire_io::ur_decode_required};
 use std::sync::Arc;
 use tracing::error;
-
-/// SPO governance vote is a tiny tx: 1 fee input, 1 change output, 1
-/// voting procedure, 2 witnesses. Same flat overestimate as the other
-/// single-cert flows.
-pub(crate) const ESTIMATED_VOTE_FEE_LOVELACE: u64 = 200_000;
 
 /// One open governance action, distilled for the operator's picker. The
 /// action id (`action_tx_hash` + `action_index`) is the source of truth;
@@ -31,7 +27,7 @@ pub(crate) struct VoteProposalSummary {
     pub target_protocol_major: Option<u64>,
 }
 
-/// Conway SecurityGroup parameters — the only parameter-change group an
+/// Conway SecurityGroup parameters: the only parameter-change group an
 /// SPO may cast a counting vote on. JSON key names verified against
 /// cardano-ledger Conway PParams (the `ppName` registry / ToJSON). A
 /// `ParameterChange` is SPO-votable iff it touches at least one of these.
@@ -122,12 +118,12 @@ pub(crate) struct VotePreview {
     payment_utxo_total_lovelace: u64,
     estimated_fee_lovelace: u64,
     can_cover_fee: bool,
-    /// Open governance actions for the picker — already filtered to those
+    /// Open governance actions for the picker: already filtered to those
     /// an SPO can cast a counting vote on.
     proposals: Vec<VoteProposalSummary>,
     /// How many open actions were hidden because they are not in the SPO
     /// chamber (TreasuryWithdrawals / NewConstitution / non-security
-    /// ParameterChange — DRep/CC only).
+    /// ParameterChange: DRep/CC only).
     non_spo_open_count: usize,
     chain_context: ChainContext,
     /// Operator's configured base URL for rationale documents, if any. The
@@ -147,7 +143,9 @@ pub(crate) async fn vote_preview(
     let payment_address = cfg
         .payment_address
         .clone()
-        .ok_or(ErrorEnvelope::not_configured("payment_address not configured"))?;
+        .ok_or(ErrorEnvelope::not_configured(
+            "payment_address not configured",
+        ))?;
 
     let (utxos, amounts, payment_utxo_total_lovelace) =
         crate::util::fetch_payment_utxos(&app.http, &app.koios_base_url, &payment_address).await?;
@@ -161,7 +159,13 @@ pub(crate) async fn vote_preview(
         })
         .collect();
 
-    let estimated_fee_lovelace = ESTIMATED_VOTE_FEE_LOVELACE;
+    let fee_params = crate::util::fee_params(&app).await?;
+    let estimated_fee_lovelace = tx_builder::preview_fee_lovelace(
+        tx_builder::TxKind::Vote,
+        utxos.len(),
+        crate::util::input_assets(&utxos)?.len(),
+        &fee_params,
+    );
     let can_cover_fee = payment_utxo_total_lovelace >= estimated_fee_lovelace;
 
     let proposals_all = koios::proposal_list(&app.http, &app.koios_base_url)
@@ -178,12 +182,14 @@ pub(crate) async fn vote_preview(
         .collect();
     let non_spo_open_count = total_open - proposals.len();
 
-    let tip = koios::tip(&app.http, &app.koios_base_url).await.map_err(|e| {
-        error!(error = %e, "koios tip failed");
-        ErrorEnvelope::upstream("upstream service unavailable")
-    })?;
+    let tip = koios::tip(&app.http, &app.koios_base_url)
+        .await
+        .map_err(|e| {
+            error!(error = %e, "koios tip failed");
+            ErrorEnvelope::upstream("upstream service unavailable")
+        })?;
     let opcert_start = state::load(&state::state_path()).opcert_start_kes_period;
-    let chain_context = chain_context_from(&tip, &params, opcert_start);
+    let chain_context = chain_context_from(&tip, &params, opcert_start)?;
 
     Ok(Json(VotePreview {
         pool_id_bech32: pool_id,
@@ -240,7 +246,10 @@ fn parse_anchor(
     url: &Option<String>,
     hash: &Option<String>,
 ) -> Result<Option<(String, String)>, ErrorEnvelope> {
-    match (url.as_deref().map(str::trim), hash.as_deref().map(str::trim)) {
+    match (
+        url.as_deref().map(str::trim),
+        hash.as_deref().map(str::trim),
+    ) {
         (None, None) | (Some(""), Some("")) | (Some(""), None) | (None, Some("")) => Ok(None),
         (Some(u), Some(h)) if !u.is_empty() && !h.is_empty() => {
             if h.len() != 64 || !h.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -260,8 +269,14 @@ pub(crate) async fn vote_start(
     State(app): State<Arc<AppState>>,
     Json(body): Json<VoteStartBody>,
 ) -> Result<Json<VoteStartResponse>, ErrorEnvelope> {
-    let crate::util::StartHandlerCtx { params, own_sk, peer_pk, cfg: _, pool_id, payment_address } =
-        crate::util::start_handler_ctx(&app, &body.pin)?;
+    let crate::util::StartHandlerCtx {
+        params,
+        own_sk,
+        peer_pk,
+        cfg: _,
+        pool_id,
+        payment_address,
+    } = crate::util::start_handler_ctx(&app, &body.pin)?;
 
     let vote_choice = parse_vote_choice(&body.vote)?;
     let builder_vote = match vote_choice {
@@ -278,10 +293,12 @@ pub(crate) async fn vote_start(
     }
 
     let anchor_pair = parse_anchor(&body.anchor_url, &body.anchor_hash)?;
-    let builder_anchor = anchor_pair.as_ref().map(|(u, h)| tx_builder::VoteAnchorInput {
-        url: u.clone(),
-        hash_hex: h.clone(),
-    });
+    let builder_anchor = anchor_pair
+        .as_ref()
+        .map(|(u, h)| tx_builder::VoteAnchorInput {
+            url: u.clone(),
+            hash_hex: h.clone(),
+        });
     let request_anchor = anchor_pair.as_ref().map(|(u, h)| shared::vote::VoteAnchor {
         url: u.clone(),
         hash_hex: h.clone(),
@@ -297,18 +314,19 @@ pub(crate) async fn vote_start(
         })
         .collect();
     if utxo_inputs.is_empty() {
-        return Err(ErrorEnvelope::insufficient_funds("no UTXOs at payment address"));
+        return Err(ErrorEnvelope::insufficient_funds(
+            "no UTXOs at payment address",
+        ));
     }
 
-    let fee_lovelace = ESTIMATED_VOTE_FEE_LOVELACE;
-    if utxo_total < fee_lovelace {
-        return Err(ErrorEnvelope::insufficient_funds("payment address cannot cover fee"));
-    }
+    let fee_params = crate::util::fee_params(&app).await?;
 
-    let tip = koios::tip(&app.http, &app.koios_base_url).await.map_err(|e| {
-        error!(error = %e, "koios tip failed");
-        ErrorEnvelope::upstream("upstream service unavailable")
-    })?;
+    let tip = koios::tip(&app.http, &app.koios_base_url)
+        .await
+        .map_err(|e| {
+            error!(error = %e, "koios tip failed");
+            ErrorEnvelope::upstream("upstream service unavailable")
+        })?;
     let ttl_slot = tip.abs_slot.saturating_add(TTL_MARGIN_SLOTS);
 
     let change_assets = crate::util::input_assets(&utxos)?;
@@ -323,13 +341,13 @@ pub(crate) async fn vote_start(
         action_index: body.action_index,
         vote: builder_vote,
         anchor: builder_anchor,
-        fee_lovelace,
+        fee_params,
         ttl_slot,
     };
     let built = tx_builder::build_vote_body(&inputs).map_err(|e| match e {
-        tx_builder::TxBuildError::InsufficientInputs { .. } => ErrorEnvelope::insufficient_funds(
-            "payment address cannot cover fee + min-ADA change",
-        ),
+        tx_builder::TxBuildError::InsufficientInputs { .. } => {
+            ErrorEnvelope::insufficient_funds("payment address cannot cover fee + min-ADA change")
+        }
         // Anchor URL over the CDDL cap: operator-typed input, so surface
         // the actionable message as invalid_input instead of an opaque
         // internal error.
@@ -341,12 +359,13 @@ pub(crate) async fn vote_start(
             }
         },
     })?;
+    let fee_lovelace = built.fee_lovelace;
 
     let body_hash = pallas_crypto::hash::Hasher::<256>::hash(&built.body_cbor);
     let body_hash_hex = hex::encode(body_hash);
 
     let opcert_start = state::load(&state::state_path()).opcert_start_kes_period;
-    let chain_context = chain_context_from(&tip, &params, opcert_start);
+    let chain_context = chain_context_from(&tip, &params, opcert_start)?;
 
     let request_inputs =
         crate::util::build_request_inputs(&utxo_inputs, &utxo_amounts, &payment_address);
@@ -368,8 +387,12 @@ pub(crate) async fn vote_start(
     };
 
     let body_fp = shared::request_body_fp(&request);
-    request.operator_pin_proof =
-        shared::pin::pin_proof_hex(&body.pin, request.kind.wire_str(), request.chain_context.built_at_unix, &body_fp);
+    request.operator_pin_proof = shared::pin::pin_proof_hex(
+        &body.pin,
+        request.kind.wire_str(),
+        request.chain_context.built_at_unix,
+        &body_fp,
+    );
 
     let (_json_bytes, ur_fragments, request_fingerprint) =
         shared::wire_io::build_sign_request(&request, &own_sk, &peer_pk)?;
@@ -396,7 +419,12 @@ pub(crate) async fn vote_result(
         return Err(ErrorEnvelope::invalid("no UR fragments"));
     }
     let (own_sk, peer_pk) = paired_keys_or_err(&app)?;
-    let json_bytes = ur_decode_required(&body.ur_fragments, &peer_pk, &own_sk, shared::qr::Direction::Response)?;
+    let json_bytes = ur_decode_required(
+        &body.ur_fragments,
+        &peer_pk,
+        &own_sk,
+        shared::qr::Direction::Response,
+    )?;
     let result: shared::vote::VoteResult = serde_json::from_slice(&json_bytes).map_err(|e| {
         error!(error = %e, "invalid request payload");
         ErrorEnvelope::invalid("invalid request payload")
@@ -406,7 +434,7 @@ pub(crate) async fn vote_result(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_spo_votable_type};
+    use super::is_spo_votable_type;
     use serde_json::json;
 
     #[test]
@@ -417,7 +445,12 @@ mod tests {
 
     #[test]
     fn shows_hardfork_noconfidence_committee_info() {
-        for t in ["HardForkInitiation", "NoConfidence", "NewCommittee", "InfoAction"] {
+        for t in [
+            "HardForkInitiation",
+            "NoConfidence",
+            "NewCommittee",
+            "InfoAction",
+        ] {
             assert!(is_spo_votable_type(t, None), "{t} should be votable");
         }
     }

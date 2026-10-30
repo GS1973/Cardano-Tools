@@ -1,4 +1,4 @@
-//! SPO Tools — offline signer.
+//! SPO Tools: offline signer.
 //!
 //! Air-gapped signing app. Runs a local web UI on http://127.0.0.1:8201
 //! that accepts UR-encoded fragments scanned from QR codes on the online
@@ -18,7 +18,6 @@ use std::process::ExitCode;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tracing::{error, info};
 
-
 /// CSP for an air-gapped single-binary webapp. Same shape as online-tool's:
 /// strictly same-origin for everything, inline `<style>` allowed for Vuetify
 /// runtime CSS, `data:` for QR images, and no framing.
@@ -27,7 +26,7 @@ const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self'; st
 const USAGE: &str = "spo-tools-signer --listen 127.0.0.1:PORT [--debug]";
 
 /// Parse `--listen ADDR:PORT` from the process arguments. Required: there
-/// is no default port — gives the SPO an explicit choice and lets two
+/// is no default port: gives the SPO an explicit choice and lets two
 /// instances coexist on the same host without collision.
 ///
 /// The parsed address is enforced to be loopback (`127.0.0.0/8` or `::1`):
@@ -86,12 +85,12 @@ fn main() -> ExitCode {
         .with_writer(std::io::stderr)
         .init();
     if debug_mode {
-        info!("debug mode active — verbose logging enabled");
+        info!("debug mode active: verbose logging enabled");
     }
     if !listen_addr.ip().is_loopback() {
         tracing::warn!(
             addr = %listen_addr,
-            "SECURITY: binding the signer to a non-loopback address — strongly discouraged on an air-gapped host"
+            "SECURITY: binding the signer to a non-loopback address, strongly discouraged on an air-gapped host"
         );
     }
 
@@ -105,7 +104,7 @@ fn main() -> ExitCode {
 }
 
 // ============================================================
-// run_serve — Axum on 127.0.0.1:<port chosen at startup>
+// run_serve, Axum on 127.0.0.1:<port chosen at startup>
 // ============================================================
 
 #[derive(rust_embed::RustEmbed)]
@@ -141,9 +140,6 @@ async fn signer_frontend_handler(uri: axum::http::Uri) -> axum::response::Respon
         .unwrap()
 }
 
-
-
-
 fn run_serve(listen_addr: std::net::SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
     use axum::routing::{get, post};
     use axum::Router;
@@ -152,18 +148,30 @@ fn run_serve(listen_addr: std::net::SocketAddr) -> Result<(), Box<dyn std::error
     let app = Router::new()
         .route("/api/health", get(handlers::diagnostics::signer_health))
         .route("/api/status", get(handlers::diagnostics::signer_status))
-        .route("/api/signer-config", get(handlers::setup::signer_config_get).post(handlers::setup::signer_config_post))
+        .route(
+            "/api/signer-config",
+            get(handlers::setup::signer_config_get).post(handlers::setup::signer_config_post),
+        )
         .route("/api/test-load", post(handlers::setup::signer_test_load))
         .route("/api/list-dir", get(handlers::list_dir::list_dir))
         .route("/api/sign/receive", post(handlers::sign::sign_receive))
         .route("/api/sign/execute", post(handlers::sign::sign_execute))
         .route("/api/pairing/info", get(handlers::pairing::pairing_info))
-        .route("/api/pairing/preview", post(handlers::pairing::pairing_preview))
-        .route("/api/pairing/set-peer", post(handlers::pairing::pairing_set_peer))
+        .route(
+            "/api/pairing/preview",
+            post(handlers::pairing::pairing_preview),
+        )
+        .route(
+            "/api/pairing/set-peer",
+            post(handlers::pairing::pairing_set_peer),
+        )
         .route("/api/pairing/clear", post(handlers::pairing::pairing_clear))
         .fallback(signer_frontend_handler)
         .layer(axum::extract::DefaultBodyLimit::max(1_048_576))
-        .layer(axum::middleware::from_fn_with_state(csrf_cfg, shared::csrf::csrf_guard))
+        .layer(axum::middleware::from_fn_with_state(
+            csrf_cfg,
+            shared::csrf::csrf_guard,
+        ))
         .layer(SetResponseHeaderLayer::overriding(
             header::CONTENT_SECURITY_POLICY,
             HeaderValue::from_static(CONTENT_SECURITY_POLICY),
@@ -181,23 +189,31 @@ fn run_serve(listen_addr: std::net::SocketAddr) -> Result<(), Box<dyn std::error
             HeaderValue::from_static("no-referrer"),
         ));
 
+    // Create the X25519 channel keypair now, so GET /api/pairing/info only
+    // ever reads it. Not fatal: the pairing handlers keep their own fallback,
+    // and a corrupt config is reported by every handler that loads it.
+    if let Ok(mut cfg) = config::load_or_err() {
+        if let Err(e) = config::ensure_own_crypto_skey(&config::config_path(), &mut cfg) {
+            tracing::warn!(error = %e, "could not create the channel keypair at startup. Pairing will create it on first use");
+        }
+    }
+
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async move {
         airgap::spawn_air_gap_monitor();
         let listener = tokio::net::TcpListener::bind(listen_addr)
             .await
-            .expect("failed to bind signer listen address");
-        let bound = listener.local_addr().expect("listener has no local addr");
+            .map_err(|e| shared::listen::listen_error(listen_addr, &e))?;
+        let bound = listener.local_addr()?;
         println!("Signer listening on http://{bound}");
         info!(
             addr = %bound,
             config_path = %config::config_path().display(),
             "signer serving (frontend embedded)"
         );
-        axum::serve(listener, app)
-            .await
-            .expect("axum serve loop terminated");
-    });
+        axum::serve(listener, app).await?;
+        Ok::<(), Box<dyn std::error::Error>>(())
+    })?;
     Ok(())
 }
 
@@ -217,12 +233,8 @@ mod tests {
         assert!(parse_listen_addr(&args(&["--listen", "127.0.0.1:8201"])).is_ok());
         assert!(parse_listen_addr(&args(&["--listen", "[::1]:8201"])).is_ok());
         assert!(parse_listen_addr(&args(&["--listen", "0.0.0.0:8201"])).is_err());
-        assert!(parse_listen_addr(&args(&[
-            "--listen",
-            "0.0.0.0:8201",
-            "--allow-non-loopback"
-        ]))
-        .is_ok());
+        assert!(
+            parse_listen_addr(&args(&["--listen", "0.0.0.0:8201", "--allow-non-loopback"])).is_ok()
+        );
     }
 }
-

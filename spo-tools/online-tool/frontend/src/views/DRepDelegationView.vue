@@ -54,7 +54,7 @@
                 <td><code class="text-caption">{{ preview.pool_reward_address }}</code></td></tr>
             <tr><td class="text-medium-emphasis">Currently delegated to</td>
                 <td>
-                  <span v-if="!preview.current_drep" class="text-caption text-medium-emphasis">(none — withdrawals blocked)</span>
+                  <span v-if="!preview.current_drep" class="text-caption text-medium-emphasis">(none: withdrawals blocked)</span>
                   <span v-else>{{ formatDrepLabel(preview.current_drep) }}</span>
                 </td></tr>
             <tr><td class="text-medium-emphasis">Payment address</td>
@@ -69,8 +69,8 @@
         <template v-if="mode !== 'receive'">
           <h3 class="text-subtitle-1 mt-2 mb-2">Choose representative</h3>
           <v-radio-group v-model="dRepChoice" hide-details density="compact" class="mb-2 compact-radios">
-            <v-radio value="abstain" label="Abstain — recommended for pool operators not engaging in governance" />
-            <v-radio value="no_confidence" label="No-confidence — votes No on every proposal automatically" />
+            <v-radio value="abstain" label="Abstain: recommended for pool operators not engaging in governance" />
+            <v-radio value="no_confidence" label="No-confidence: votes No on every proposal automatically" />
             <v-radio value="custom" label="Specific DRep" />
           </v-radio-group>
           <v-text-field
@@ -159,7 +159,7 @@
               <div class="raw-line mb-3">{{ request.tx_body_cbor_hex }}</div>
               </template>
               <div v-for="w in result.witnesses" :key="w.role" class="mb-3">
-                <div class="text-caption text-medium-emphasis mb-1">Witness — {{ w.role }}</div>
+                <div class="text-caption text-medium-emphasis mb-1">Witness: {{ w.role }}</div>
                 <div class="text-caption text-medium-emphasis">vkey</div>
                 <div class="raw-line mb-1">{{ w.vkey_hex }}</div>
                 <div class="text-caption text-medium-emphasis">signature</div>
@@ -222,7 +222,7 @@
               <div class="text-caption text-medium-emphasis mb-1">Tx body CBOR (hex)</div>
               <div class="raw-line mb-3">{{ request.tx_body_cbor_hex }}</div>
               <div v-for="w in result.witnesses" :key="w.role" class="mb-3">
-                <div class="text-caption text-medium-emphasis mb-1">Witness — {{ w.role }}</div>
+                <div class="text-caption text-medium-emphasis mb-1">Witness: {{ w.role }}</div>
                 <div class="text-caption text-medium-emphasis">vkey</div>
                 <div class="raw-line mb-1">{{ w.vkey_hex }}</div>
                 <div class="text-caption text-medium-emphasis">signature</div>
@@ -352,8 +352,8 @@ function formatDrepLabel(s: string): string {
 function formatChoice(c: DRepChoice): string {
   if (c.kind === 'abstain') return 'Abstain (always-abstain DRep)'
   if (c.kind === 'no_confidence') return 'No-confidence DRep'
-  if (c.kind === 'key_hash') return `Specific DRep (key) — ${c.hash_hex?.slice(0, 16)}…`
-  if (c.kind === 'script_hash') return `Specific DRep (script) — ${c.hash_hex?.slice(0, 16)}…`
+  if (c.kind === 'key_hash') return `Specific DRep (key): ${c.hash_hex?.slice(0, 16)}…`
+  if (c.kind === 'script_hash') return `Specific DRep (script): ${c.hash_hex?.slice(0, 16)}…`
   return 'unknown'
 }
 
@@ -401,7 +401,7 @@ async function enterReceive() {
   receiveCardEl.value?.$el?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
 }
 
-// Any choice edit after a build was generated invalidates that build —
+// Any choice edit after a build was generated invalidates that build:
 // scanning the stale QR would sign a delegation that no longer matches
 // what the SPO sees on screen. Discard request + QR + result so the SPO
 // must click Send to Signer again.
@@ -500,12 +500,12 @@ async function submitFragments(fragments: string[]) {
     const data = await r.json()
     // Correlate the result with the pending request: a leftover result for
     // an earlier (cancelled/rebuilt) request must not be shown as ready to
-    // submit — its witnesses sign a different tx body.
+    // submit: its witnesses sign a different tx body.
     if (bodyHashHex.value && data.body_hash_hex !== bodyHashHex.value) {
-      throw new Error('signed result does not match the pending request (tx body hash differs) — scan the result for the request shown above')
+      throw new Error('signed result does not match the pending request (tx body hash differs): scan the result for the request shown above')
     }
     result.value = data
-    notify.success(`Signed result received — ${data.witnesses.length} witnesses`)
+    notify.success(`Signed result received: ${data.witnesses.length} witnesses`)
     await nextTick()
     resultCardEl.value?.$el?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
     stopCycle()
@@ -545,7 +545,7 @@ async function submitToChain() {
       throw new Error(err.message)
     }
     submitted.value = await r.json()
-    notify.success(`Tx submitted — ${submitted.value!.tx_hash.slice(0, 16)}…`)
+    notify.success(`Tx submitted: ${submitted.value!.tx_hash.slice(0, 16)}…`)
   } catch (e: unknown) {
     submitError.value = e instanceof Error ? e.message : String(e)
   } finally {

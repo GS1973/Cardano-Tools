@@ -1,4 +1,4 @@
-// Hand-written — NOT ts_rs-generated. Re-exports the role-neutral wire types
+// Hand-written, NOT ts_rs-generated. Re-exports the role-neutral wire types
 // owned by airgap-core so consumers import them from a stable path that a
 // ts_rs regen cannot clobber. The previous re-export was appended to the
 // generated wire.ts and only survived because the gen script re-added it; a

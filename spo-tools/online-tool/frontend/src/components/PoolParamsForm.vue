@@ -69,7 +69,7 @@
           <strong>Pending pool-parameter change</strong>
           <v-spacer />
           <span class="text-caption text-medium-emphasis">
-            Active in epoch {{ current.pending.active_epoch_no }} —
+            Active in epoch {{ current.pending.active_epoch_no }}:
             {{ pendingCountdown }}
           </span>
         </div>
@@ -82,7 +82,7 @@
           </div>
         </div>
         <div class="text-caption text-medium-emphasis mt-2">
-          Tx <code>{{ current.pending.tx_hash.slice(0, 16) }}…</code> —
+          Tx <code>{{ current.pending.tx_hash.slice(0, 16) }}…</code>:
           <a
             :href="`https://explorer.cardano.org/en/transaction?id=${current.pending.tx_hash}`"
             target="_blank"
@@ -192,7 +192,7 @@
           Owner balance {{ fmtAda(pledgePrecheck.owner_balance_lovelace) }}
           meets the new pledge {{ fmtAda(pledgePrecheck.pledge_lovelace) }}.
           <span class="text-caption text-medium-emphasis">
-            (Based on current balance — actual pledge check at epoch boundary
+            (Based on current balance: actual pledge check at epoch boundary
             uses the active stake snapshot.)
           </span>
         </v-alert>
@@ -212,7 +212,7 @@
           <p class="mb-2 text-body-2">
             The protocol verifies pledge against the active stake snapshot,
             taken 1–2 epochs before activation. Even if you fund the owner
-            wallet now, the snapshot may not yet reflect it — the pool
+            wallet now, the snapshot may not yet reflect it: the pool
             drops out of leader rotation for at least one epoch until a
             new snapshot includes the funding.
           </p>
@@ -327,16 +327,26 @@
         <div v-if="diffRelays" class="text-caption text-gold mt-1">Relays differ from the latest known state.</div>
 
         <h3 class="text-subtitle-2 mt-4 mb-2">Pool metadata</h3>
-        <v-text-field
-          v-model="form.metadataUrl"
-          :class="{ 'changed-field': diffMetadataUrl }"
-          label="Metadata URL"
-          placeholder="https://example.com/pool.json"
-          density="compact"
-          variant="outlined"
-          hide-details
-          class="mb-2"
-        />
+        <div class="d-flex align-center mb-2" style="gap: 0.5rem;">
+          <v-text-field
+            v-model="form.metadataUrl"
+            :class="{ 'changed-field': diffMetadataUrl }"
+            label="Metadata URL"
+            placeholder="https://example.com/pool.json"
+            density="compact"
+            variant="outlined"
+            hide-details
+          />
+          <v-btn
+            v-if="form.metadataUrl"
+            size="small"
+            variant="tonal"
+            :loading="hashingMetadataUrl"
+            prepend-icon="mdi-cloud-download"
+            @click="fetchMetadataUrlHash"
+          >Fetch and hash</v-btn>
+        </div>
+        <div v-if="metadataUrlHashNote" class="text-caption mb-2" :class="metadataUrlHashMismatch ? 'text-error' : 'text-medium-emphasis'">{{ metadataUrlHashNote }}</div>
         <div class="d-flex align-center mb-2" style="gap: 0.5rem;">
           <v-file-input
             v-model="metadataFile"
@@ -440,6 +450,9 @@ const form = ref({
 
 const metadataFile = ref<File | null>(null)
 const hashingMetadata = ref(false)
+const hashingMetadataUrl = ref(false)
+const metadataUrlHashNote = ref('')
+const metadataUrlHashMismatch = ref(false)
 const starting = ref(false)
 
 interface PledgePrecheck {
@@ -650,7 +663,7 @@ function populateFormFromLatest(c: LatestKnown, owners: string[]) {
   form.value.fixedCostAda = lovelaceToAdaString(c.fixed_cost_lovelace)
   if (c.margin_numerator != null && c.margin_denominator != null && c.margin_denominator > 0) {
     // The backend recovered the exact rational behind the Koios float.
-    // The percent string is display-only while untouched — the build
+    // The percent string is display-only while untouched: the build
     // request carries the rational verbatim (see marginAsRational).
     prefilledMarginRational.value = { numerator: c.margin_numerator, denominator: c.margin_denominator }
     form.value.marginPercent =
@@ -770,6 +783,41 @@ async function computeMetadataHash() {
     notify.error(e instanceof Error ? e.message : String(e))
   } finally {
     hashingMetadata.value = false
+  }
+}
+
+// Fetch the bytes the metadata URL serves, through the guarded document
+// client of the online tool, and hash them: the certificate must carry the
+// hash of what the URL serves, not of a local copy that may differ.
+async function fetchMetadataUrlHash() {
+  const url = form.value.metadataUrl.trim()
+  if (!url) return
+  hashingMetadataUrl.value = true
+  metadataUrlHashNote.value = ''
+  metadataUrlHashMismatch.value = false
+  try {
+    const r = await fetch('/api/pool/metadata-url-hash', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    })
+    const d = await r.json()
+    if (d.status === 'error') throw new Error(d.message)
+    const previous = form.value.metadataHashHex.trim().toLowerCase()
+    form.value.metadataHashHex = d.hash_hex
+    if (previous && previous !== d.hash_hex) {
+      metadataUrlHashMismatch.value = true
+      metadataUrlHashNote.value = `The URL serves ${d.byte_len} bytes with hash ${d.hash_hex}, which differs from the hash that was in the field. The field now holds the hash of what the URL serves.`
+    } else {
+      metadataUrlHashNote.value = `Hash of the ${d.byte_len} bytes the URL serves.`
+    }
+    notify.success(`Hash computed from the URL (${d.byte_len} bytes)`)
+  } catch (e: unknown) {
+    metadataUrlHashNote.value = e instanceof Error ? e.message : String(e)
+    metadataUrlHashMismatch.value = true
+    notify.error(metadataUrlHashNote.value)
+  } finally {
+    hashingMetadataUrl.value = false
   }
 }
 

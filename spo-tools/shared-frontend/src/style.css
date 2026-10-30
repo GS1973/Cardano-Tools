@@ -1,5 +1,5 @@
 /*
- * Roboto Condensed — self-hosted, latin-only subset.
+ * Roboto Condensed: self-hosted, latin-only subset.
  * Same upstream file Google Fonts serves; bundling it removes the
  * runtime CDN fetch (privacy / air-gap) and the Google-Fonts @import
  * leak. Variable-axis woff2 covers 300 / 400 / 700.
@@ -87,7 +87,7 @@ th {
 .status-dot.bad { background: #FF6B6B; }
 
 
-/* QR / UR fragment list — used by every operational view's send-side
+/* QR / UR fragment list: used by every operational view's send-side
    panel. Active fragment is highlighted with a goud background to draw
    the eye when the carousel cycles to the next frame. */
 .ur-list {
@@ -120,7 +120,7 @@ th {
 }
 
 /* Selection-control (radio) sizing. Vuetify renders the bulb glyph at 24px
-   and the label at 1rem (16px) — oversized next to the text-caption (12px)
+   and the label at 1rem (16px): oversized next to the text-caption (12px)
    and text-body-2 (14px) used throughout these forms (density="compact"
    only tightens spacing, not size). Scope the trim to groups marked
    `compact-radios` so the bulb and label sit in line with the body text. */

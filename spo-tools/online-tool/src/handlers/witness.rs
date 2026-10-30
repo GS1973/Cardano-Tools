@@ -39,18 +39,27 @@ pub(crate) async fn witness_start(
     State(app): State<Arc<AppState>>,
     Json(body): Json<WitnessStartBody>,
 ) -> Result<Json<WitnessStartResponse>, ErrorEnvelope> {
-    let StartHandlerCtx { params, own_sk, peer_pk, cfg: _, pool_id, payment_address: _ } =
-        start_handler_ctx(&app, &body.pin)?;
+    let StartHandlerCtx {
+        params,
+        own_sk,
+        peer_pk,
+        cfg: _,
+        pool_id,
+        payment_address: _,
+    } = start_handler_ctx(&app, &body.pin)?;
     shared::validate::assert_canonical_body_nquads(body.canonical_body.as_bytes())
         .map_err(|e| ErrorEnvelope::invalid(format!("not a canonical CIP-100 body: {e}")))?;
-    let tip = koios::tip(&app.http, &app.koios_base_url).await.map_err(|e| {
-        error!(error = %e, "koios tip failed");
-        ErrorEnvelope::upstream("upstream service unavailable")
-    })?;
+    let tip = koios::tip(&app.http, &app.koios_base_url)
+        .await
+        .map_err(|e| {
+            error!(error = %e, "koios tip failed");
+            ErrorEnvelope::upstream("upstream service unavailable")
+        })?;
     let opcert_start = state::load(&state::state_path()).opcert_start_kes_period;
-    let chain_context = chain_context_from(&tip, &params, opcert_start);
-    let body_hash_hex =
-        hex::encode(pallas_crypto::hash::Hasher::<256>::hash(body.canonical_body.as_bytes()));
+    let chain_context = chain_context_from(&tip, &params, opcert_start)?;
+    let body_hash_hex = hex::encode(pallas_crypto::hash::Hasher::<256>::hash(
+        body.canonical_body.as_bytes(),
+    ));
     let mut request = shared::witness_doc::SpoWitnessRequest {
         kind: shared::wire_kind::WireKind::WitnessDoc,
         canonical_body: body.canonical_body,
@@ -67,7 +76,12 @@ pub(crate) async fn witness_start(
     );
     let (_json, ur_fragments, request_fingerprint) =
         shared::wire_io::build_sign_request(&request, &own_sk, &peer_pk)?;
-    Ok(Json(WitnessStartResponse { request, body_hash_hex, ur_fragments, request_fingerprint }))
+    Ok(Json(WitnessStartResponse {
+        request,
+        body_hash_hex,
+        ur_fragments,
+        request_fingerprint,
+    }))
 }
 
 #[derive(Deserialize)]

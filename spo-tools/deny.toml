@@ -16,17 +16,20 @@ yanked = "deny"
 # here: cargo-deny works from the default-feature build graph, which excludes
 # the off-by-default optional vrf10 dependency, so the published 3.2.0 is out
 # of scope. cargo-audit reads Cargo.lock, where it is still pinned, so its
-# suppression lives in .cargo/audit.toml — see SECURITY.md.)
+# suppression lives in .cargo/audit.toml: see SECURITY.md.)
 # Re-evaluate every Amaru bump.
 ignore = [
-  # serde_cbor unmaintained — only in amaru-kes-summed-ed25519 dev-deps
+  # serde_cbor unmaintained, only in amaru-kes-summed-ed25519 dev-deps
   "RUSTSEC-2021-0127",
-  # bincode unmaintained — only in amaru-curve25519-dalek dev-deps
+  # bincode unmaintained, only in amaru-curve25519-dalek dev-deps
   "RUSTSEC-2025-0141",
-  # rand 0.7.3 unsound advisory — surfaces only in amaru dev-deps
+  # rand 0.7.3 unsound advisory: surfaces only in amaru dev-deps
   "RUSTSEC-2026-0097",
-  # atty unmaintained — only in amaru dev-deps via criterion
+  # atty unmaintained, only in amaru dev-deps via criterion
   "RUSTSEC-2024-0375",
+  # atty potential unaligned read (Windows only), same dev-dep path via
+  # criterion, never compiled into a release binary
+  "RUSTSEC-2021-0145",
 ]
 
 [bans]
@@ -78,7 +81,7 @@ allow = [
 confidence-threshold = 0.8
 
 [sources]
-# Only allow git deps that we explicitly vendor (none currently — the
+# Only allow git deps that we explicitly vendor (none currently: the
 # Amaru crates are vendored as path deps under ./vendor/).
 unknown-registry = "deny"
 unknown-git = "deny"

@@ -1,15 +1,15 @@
-//! SPO governance vote request/result types — wire format between online
+//! SPO governance vote request/result types: wire format between online
 //! tool and signer.
 //!
 //! Same structure as the DRep-delegation flow: the request carries the
 //! unsigned Conway tx body CBOR, and the signer hashes it and signs with
 //! the payment skey (fee input) plus the cold skey (the pool's voting
-//! authority — the cold key's hash is the pool id that the on-chain
+//! authority: the cold key's hash is the pool id that the on-chain
 //! `Voter::StakePoolKey` names).
 
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 use serde_with::{serde_as, DisplayFromStr};
+use ts_rs::TS;
 
 use crate::chain_context::ChainContext;
 use crate::utxo::UtxoInput;
@@ -26,7 +26,7 @@ pub enum VoteChoice {
     Abstain,
 }
 
-/// Optional public rationale for the vote — a document URL plus the
+/// Optional public rationale for the vote: a document URL plus the
 /// 32-byte hash of its contents, the same shape as pool metadata. When
 /// absent the on-chain `VotingProcedure.anchor` is null, which is valid.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
@@ -67,7 +67,7 @@ pub struct VoteRequest {
     pub pool_id_bech32: String,
     /// Governance action being voted on: 64-char hex of the proposal tx
     /// hash plus the proposal index. Together they are the action id the
-    /// protocol uses — the source of truth, shown to the operator.
+    /// protocol uses: the source of truth, shown to the operator.
     pub action_tx_hash_hex: String,
     pub action_index: u32,
     pub vote: VoteChoice,
@@ -81,8 +81,8 @@ pub struct VoteRequest {
     /// Operator-PIN proof: 8 bytes (16 hex chars) of blake2b-256 over a
     /// domain-separated, length-prefixed preimage of the request kind,
     /// `chain_context.built_at_unix`, the request-body fingerprint
-    /// (computed with this field blanked) and the operator's 4-digit PIN
-    /// — see [`crate::pin`]. The operator types the PIN at QR-build time
+    /// (computed with this field blanked) and the operator's 4-digit PIN:
+    /// see [`crate::pin`]. The operator types the PIN at QR-build time
     /// on the online tool; the signer prompts for the same PIN after
     /// decrypt and refuses to sign on mismatch. Operator-presence gate at
     /// the moment of signing.

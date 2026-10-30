@@ -11,15 +11,15 @@
       <div class="status-item" :title="networkTitle">
         <template v-if="airGapped === true">
           <v-icon size="14" color="success">mdi-check-circle</v-icon>
-          <span class="airgap-ok">Air-gapped</span>
+          <span class="airgap-ok">No network detected</span>
         </template>
         <template v-else-if="airGapped === false">
           <v-icon size="14" color="error" class="blink">mdi-alert</v-icon>
-          <span class="airgap-bad blink">NOT AIR-GAPPED!</span>
+          <span class="airgap-bad blink">NETWORK DETECTED!</span>
         </template>
         <template v-else>
           <v-icon size="14" color="warning" class="blink">mdi-help-circle</v-icon>
-          <span class="airgap-unknown blink">AIR-GAP UNVERIFIED</span>
+          <span class="airgap-unknown blink">NETWORK CHECK UNVERIFIED</span>
         </template>
       </div>
     </template>
@@ -38,9 +38,9 @@ const kesPeriod = ref<number | null>(null)
 const epochEndsUnix = ref<number | null>(null)
 const opcertExpiresUnix = ref<number | null>(null)
 // Tri-state: null = never measured / measurement stale. The badge must not
-// claim "Air-gapped" unless a successful /api/status response said so.
+// claim "No network detected" unless a successful /api/status response said so.
 const airGapped = ref<boolean | null>(null)
-const networkTitle = ref('Air-gap status not verified yet')
+const networkTitle = ref('Network check not run yet')
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
 // Tolerate this many consecutive failed polls before degrading a previously
@@ -54,10 +54,12 @@ async function refresh() {
     if (!r.ok) throw new Error(`HTTP ${r.status}`)
     const d = await r.json()
     failedPolls = 0
-    airGapped.value = d.air_gapped
-    networkTitle.value = d.air_gapped
-      ? 'No active non-loopback network adapter detected'
-      : 'WARNING: this signer machine is connected to a network'
+    airGapped.value = d.air_gapped ?? null
+    networkTitle.value = d.air_gapped === true
+      ? 'No active non-loopback network adapter detected. This check sees IP traffic only. It cannot confirm an air gap.'
+      : d.air_gapped === false
+        ? 'WARNING: this signer machine is connected to a network'
+        : 'Network check not run yet'
     const ctx = d.chain_context ?? null
     epoch.value = ctx?.current_epoch ?? null
     kesPeriod.value = ctx?.current_kes_period ?? null
@@ -70,7 +72,7 @@ async function refresh() {
     failedPolls += 1
     if (airGapped.value === null || failedPolls >= MAX_FAILED_POLLS) {
       airGapped.value = null
-      networkTitle.value = 'Air-gap status unknown: the signer backend is not responding'
+      networkTitle.value = 'Network check unknown: the signer backend is not responding'
     }
   }
 }

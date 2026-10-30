@@ -87,7 +87,7 @@
             class="text-caption text-medium-emphasis mb-3"
           >
             {{ preview.non_spo_open_count }} other open action(s) are outside the SPO
-            chamber (treasury / constitution / non-security parameter changes —
+            chamber (treasury / constitution / non-security parameter changes:
             DRep &amp; CC only) and are hidden here.
           </p>
 
@@ -112,13 +112,13 @@
               <v-radio value="abstain" label="Abstain" />
             </v-radio-group>
             <p class="text-caption text-medium-emphasis mb-3">
-              The pool's cold key signs this vote; it carries the pool's full stake
+              The pool's cold key signs this vote. It carries the pool's full stake
               weight (pledge + all delegators) in the SPO chamber.
             </p>
 
             <h3 class="text-subtitle-1 mt-2 mb-2">Rationale (CIP-136, optional)</h3>
             <template v-if="preview.manifest_base_url">
-              <p class="text-caption text-medium-emphasis mb-2">Enter just the file name; the on-chain URL is composed from your configured base. The hash is the blake2b-256 of the document's contents — host it first, then compute. Leave the file name empty for no anchor.</p>
+              <p class="text-caption text-medium-emphasis mb-2">Enter just the file name. The on-chain URL is composed from your configured base. The hash is the blake2b-256 of the document's contents: host it first, then compute. Leave the file name empty for no anchor.</p>
               <v-text-field v-model="manifestFile" label="Rationale file name" placeholder="rationale.jsonld" density="compact" variant="outlined" hide-details class="mb-2" />
               <p v-if="composedManifestUrl" class="text-caption text-medium-emphasis mb-2">Full URL (goes on-chain): <code style="word-break: break-all;">{{ composedManifestUrl }}</code></p>
               <div class="d-flex align-start" style="gap: 0.5rem;">
@@ -208,7 +208,7 @@
               <div class="raw-line mb-3">{{ request.tx_body_cbor_hex }}</div>
               </template>
               <div v-for="w in result.witnesses" :key="w.role" class="mb-3">
-                <div class="text-caption text-medium-emphasis mb-1">Witness — {{ w.role }}</div>
+                <div class="text-caption text-medium-emphasis mb-1">Witness: {{ w.role }}</div>
                 <div class="text-caption text-medium-emphasis">vkey</div>
                 <div class="raw-line mb-1">{{ w.vkey_hex }}</div>
                 <div class="text-caption text-medium-emphasis">signature</div>
@@ -286,7 +286,7 @@
         <strong>{{ selectedProposal ? formatVote(voteChoice) : '' }}</strong>
         on action
         <code v-if="selectedProposal">{{ selectedProposal.action_tx_hash }}#{{ selectedProposal.action_index }}</code>.
-        The cold key signs; the vote carries the pool's full stake weight.
+        The cold key signs. The vote carries the pool's full stake weight.
       </p>
     </PreSendConfirm>
   </SignFlowLayout>
@@ -430,7 +430,7 @@ const canBuild = computed(() =>
 function proposalLabel(p: VoteProposalSummary): string {
   const head = p.title || p.proposal_type
   const ver = p.target_protocol_major != null ? ` (→ v${p.target_protocol_major})` : ''
-  return `${p.proposal_type}${ver} — ${head} — ${p.action_tx_hash.slice(0, 12)}…#${p.action_index}`
+  return `${p.proposal_type}${ver}, ${head}, ${p.action_tx_hash.slice(0, 12)}…#${p.action_index}`
 }
 
 function formatVote(v: VoteChoice): string {
@@ -470,7 +470,7 @@ async function enterReceive() {
 }
 
 // Any edit to the selected action, vote, or rationale invalidates a built
-// request — scanning the stale QR would sign a vote that no longer matches
+// request: scanning the stale QR would sign a vote that no longer matches
 // what the operator sees. Discard request + QR + result.
 function onChoiceChanged() {
   if (!request.value && !result.value) return
@@ -562,12 +562,12 @@ async function submitFragments(fragments: string[]) {
     const data = await r.json()
     // Correlate the result with the pending request: a leftover result for
     // an earlier (cancelled/rebuilt) request must not be shown as ready to
-    // submit — its witnesses sign a different tx body.
+    // submit: its witnesses sign a different tx body.
     if (bodyHashHex.value && data.body_hash_hex !== bodyHashHex.value) {
-      throw new Error('signed result does not match the pending request (tx body hash differs) — scan the result for the request shown above')
+      throw new Error('signed result does not match the pending request (tx body hash differs): scan the result for the request shown above')
     }
     result.value = data
-    notify.success(`Signed result received — ${data.witnesses.length} witnesses`)
+    notify.success(`Signed result received: ${data.witnesses.length} witnesses`)
     await nextTick()
     resultCardEl.value?.$el?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
     stopCycle()
@@ -606,7 +606,7 @@ async function submitToChain() {
       throw new Error(err.message)
     }
     submitted.value = await r.json()
-    notify.success(`Tx submitted — ${submitted.value!.tx_hash.slice(0, 16)}…`)
+    notify.success(`Tx submitted: ${submitted.value!.tx_hash.slice(0, 16)}…`)
   } catch (e: unknown) {
     submitError.value = e instanceof Error ? e.message : String(e)
   } finally {

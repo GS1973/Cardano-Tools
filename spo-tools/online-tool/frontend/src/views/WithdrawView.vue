@@ -75,8 +75,8 @@
               <td class="text-medium-emphasis">Payment UTXOs</td>
               <td>
                 <div v-for="u in preview.payment_utxos" :key="`${u.tx_hash}#${u.tx_index}`" class="text-caption">
-                  <code>{{ u.tx_hash.slice(0, 16) }}…#{{ u.tx_index }}</code>
-                  &nbsp;—&nbsp;{{ fmtAda(u.lovelace) }}
+                  <code>{{ u.tx_hash.slice(0, 16) }}…#{{ u.tx_index }}</code>,
+                  &nbsp;{{ fmtAda(u.lovelace) }}
                 </div>
                 <div v-if="!preview.payment_utxos.length" class="text-caption text-medium-emphasis">none</div>
               </td>
@@ -180,7 +180,7 @@
               </template>
 
               <div v-for="w in result.witnesses" :key="w.role" class="mb-3">
-                <div class="text-caption text-medium-emphasis mb-1">Witness — {{ w.role }}</div>
+                <div class="text-caption text-medium-emphasis mb-1">Witness: {{ w.role }}</div>
                 <div class="text-caption text-medium-emphasis">vkey</div>
                 <div class="raw-line mb-1">{{ w.vkey_hex }}</div>
                 <div class="text-caption text-medium-emphasis">signature</div>
@@ -249,7 +249,7 @@
               <div class="raw-line mb-3">{{ request.tx_body_cbor_hex }}</div>
 
               <div v-for="w in result.witnesses" :key="w.role" class="mb-3">
-                <div class="text-caption text-medium-emphasis mb-1">Witness — {{ w.role }}</div>
+                <div class="text-caption text-medium-emphasis mb-1">Witness: {{ w.role }}</div>
                 <div class="text-caption text-medium-emphasis">vkey</div>
                 <div class="raw-line mb-1">{{ w.vkey_hex }}</div>
                 <div class="text-caption text-medium-emphasis">signature</div>
@@ -513,12 +513,12 @@ async function submitFragments(fragments: string[]) {
     const data = await r.json()
     // Correlate the result with the pending request: a leftover result for
     // an earlier (cancelled/rebuilt) request must not be shown as ready to
-    // submit — its witnesses sign a different tx body.
+    // submit: its witnesses sign a different tx body.
     if (bodyHashHex.value && data.body_hash_hex !== bodyHashHex.value) {
-      throw new Error('signed result does not match the pending request (tx body hash differs) — scan the result for the request shown above')
+      throw new Error('signed result does not match the pending request (tx body hash differs): scan the result for the request shown above')
     }
     result.value = data
-    notify.success(`Signed result received — ${data.witnesses.length} witnesses`)
+    notify.success(`Signed result received: ${data.witnesses.length} witnesses`)
     await nextTick()
     resultCardEl.value?.$el?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
     stopCycle()
@@ -564,7 +564,7 @@ async function submitToChain() {
       throw new Error(err.message)
     }
     submitted.value = await r.json()
-    notify.success(`Tx submitted — ${submitted.value!.tx_hash.slice(0, 16)}…`)
+    notify.success(`Tx submitted: ${submitted.value!.tx_hash.slice(0, 16)}…`)
   } catch (e: unknown) {
     submitError.value = e instanceof Error ? e.message : String(e)
   } finally {

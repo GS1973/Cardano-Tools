@@ -5,9 +5,9 @@
 //! boundary lives here: the canonical action types, wire-format
 //! definitions, and any helpers both sides need to agree on.
 //!
-//! Role-neutral primitives — the encrypted QR/UR transport, X25519
+//! Role-neutral primitives (the encrypted QR/UR transport, X25519
 //! pairing, operator PIN, cardano-cli key loading, chain-context
-//! snapshot, and the UTxO + vkey-witness wire shapes — live in the
+//! snapshot, and the UTxO + vkey-witness wire shapes) live in the
 //! `airgap-core` crate (shared with DREP Tools) and are re-exported here
 //! so every existing `shared::` / `crate::` path keeps resolving.
 
@@ -15,9 +15,9 @@
 
 // Role-neutral primitives, re-exported from airgap-core.
 pub use airgap_core::{
-    asset, cardano_keys, chain_context, config_helpers, crypto, csrf, error, fingerprint, pairing,
-    pin,
-    qr, tx, utxo, validate, wire_io, witness,
+    airgap_monitor, asset, cardano_keys, chain_context, config_helpers, crypto, csrf, error,
+    fingerprint, key_files, list_dir, listen, nquads, pairing, pin, qr, signer_state, signing, tx,
+    utxo, validate, wire_io, witness,
 };
 
 /// Fingerprint a request body for the operator-PIN proof, computed over the
@@ -41,8 +41,8 @@ pub mod praos;
 pub mod tx_validator;
 pub mod vote;
 pub mod wire_kind;
-pub mod witness_doc;
 pub mod withdrawal;
+pub mod witness_doc;
 
 #[cfg(test)]
 mod request_body_fp_tests {
@@ -78,8 +78,17 @@ mod request_body_fp_tests {
 
         // Signer side: recompute the body fingerprint over the blanked request.
         let body_fp_signer = request_body_fp(&received);
-        assert_eq!(body_fp_online, body_fp_signer, "body_fp must match across the wire");
-        assert!(pin::verify_pin("1234", "withdrawal", 1700, &body_fp_signer, &proof));
+        assert_eq!(
+            body_fp_online, body_fp_signer,
+            "body_fp must match across the wire"
+        );
+        assert!(pin::verify_pin(
+            "1234",
+            "withdrawal",
+            1700,
+            &body_fp_signer,
+            &proof
+        ));
     }
 
     #[test]
@@ -101,6 +110,12 @@ mod request_body_fp_tests {
             operator_pin_proof: String::new(),
         };
         let swapped_fp = request_body_fp(&swapped);
-        assert!(!pin::verify_pin("1234", "withdrawal", 1700, &swapped_fp, &proof));
+        assert!(!pin::verify_pin(
+            "1234",
+            "withdrawal",
+            1700,
+            &swapped_fp,
+            &proof
+        ));
     }
 }

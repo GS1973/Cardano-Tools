@@ -1,15 +1,17 @@
 use crate::{
     koios, state, tx_builder,
     util::{chain_context_from, paired_keys_or_err, TTL_MARGIN_SLOTS},
-    AppState};
-use shared::{chain_context::ChainContext, wire_io::ur_decode_required};
-use shared::error::ErrorEnvelope;
-use axum::{extract::{Query, State}, Json};
+    AppState,
+};
+use axum::{
+    extract::{Query, State},
+    Json,
+};
 use serde::{Deserialize, Serialize};
+use shared::error::ErrorEnvelope;
+use shared::{chain_context::ChainContext, wire_io::ur_decode_required};
 use std::sync::Arc;
 use tracing::error;
-
-pub(crate) const ESTIMATED_POOL_UPDATE_FEE_LOVELACE: u64 = 250_000;
 
 #[derive(Serialize, ts_rs::TS)]
 #[ts(export, export_to = "../../shared-frontend/src/types/handlers.ts")]
@@ -17,19 +19,19 @@ pub(crate) struct PoolParamsCurrent {
     pool_id_bech32: String,
     vrf_key_hash: String,
     /// Bech32 stake addresses of all on-chain owners. v1.0 supports
-    /// single-owner pools only — `is_single_owner` flags multi-owner cases.
+    /// single-owner pools only: `is_single_owner` flags multi-owner cases.
     owners: Vec<String>,
     is_single_owner: bool,
     #[ts(type = "number")]
     pledge_lovelace: u64,
     margin: f64,
     /// Exact margin rational recovered from the Koios float (which is all
-    /// Koios exposes — see `margin_rational_from_f64`). The build request
+    /// Koios exposes: see `margin_rational_from_f64`). The build request
     /// takes an exact numerator/denominator back, so prefilling an
     /// unedited margin from these keeps it stable across a
     /// re-registration instead of drifting to a re-rounded percent
     /// (e.g. 1/3 silently becoming 333333/1000000). `None` when no
-    /// rational reproduces the float — the UI must then warn that
+    /// rational reproduces the float: the UI must then warn that
     /// re-registering may alter the margin.
     #[ts(type = "number | null")]
     margin_numerator: Option<u64>,
@@ -54,7 +56,7 @@ pub(crate) struct PoolParamsCurrent {
     pending: Option<PoolParamsPending>,
     /// True when Koios `/pool_updates` was unreachable; `pending` will be
     /// `None` but the operator should not interpret that as "no pending
-    /// update" — it just means the check could not be performed.
+    /// update": it just means the check could not be performed.
     pending_updates_unavailable: bool,
 }
 
@@ -80,7 +82,8 @@ pub(crate) struct PoolParamsPending {
     owners: Vec<String>,
     relays: Vec<koios::Relay>,
     metadata_url: Option<String>,
-    metadata_hash: Option<String>}
+    metadata_hash: Option<String>,
+}
 
 /// Mutable pool registration params extracted from either the most
 /// recent on-chain registration (via `/pool_updates`) or the
@@ -102,17 +105,23 @@ struct PoolParamsExtract {
 
 fn pool_params_from_update(u: &koios::PoolUpdate) -> Result<PoolParamsExtract, ErrorEnvelope> {
     Ok(PoolParamsExtract {
-        vrf_key_hash: u.vrf_key_hash.clone().ok_or(ErrorEnvelope::upstream("vrf_key_hash missing in pool_updates"))?,
-        pledge_lovelace: u.pledge
+        vrf_key_hash: u.vrf_key_hash.clone().ok_or(ErrorEnvelope::upstream(
+            "vrf_key_hash missing in pool_updates",
+        ))?,
+        pledge_lovelace: u
+            .pledge
             .as_ref()
             .and_then(|s| s.parse().ok())
             .ok_or(ErrorEnvelope::upstream("pledge missing in pool_updates"))?,
-        margin: u.margin.ok_or(ErrorEnvelope::upstream("margin missing in pool_updates"))?,
-        fixed_cost_lovelace: u.fixed_cost
-            .as_ref()
-            .and_then(|s| s.parse().ok())
-            .ok_or(ErrorEnvelope::upstream("fixed_cost missing in pool_updates"))?,
-        reward_address: u.reward_addr.clone().ok_or(ErrorEnvelope::upstream("reward_addr missing in pool_updates"))?,
+        margin: u
+            .margin
+            .ok_or(ErrorEnvelope::upstream("margin missing in pool_updates"))?,
+        fixed_cost_lovelace: u.fixed_cost.as_ref().and_then(|s| s.parse().ok()).ok_or(
+            ErrorEnvelope::upstream("fixed_cost missing in pool_updates"),
+        )?,
+        reward_address: u.reward_addr.clone().ok_or(ErrorEnvelope::upstream(
+            "reward_addr missing in pool_updates",
+        ))?,
         owners: u.owners.clone(),
         relays: u.relays.clone(),
         metadata_url: u.meta_url.clone(),
@@ -122,17 +131,25 @@ fn pool_params_from_update(u: &koios::PoolUpdate) -> Result<PoolParamsExtract, E
 
 fn pool_params_from_info(p: &koios::PoolInfo) -> Result<PoolParamsExtract, ErrorEnvelope> {
     Ok(PoolParamsExtract {
-        vrf_key_hash: p.vrf_key_hash.clone().ok_or(ErrorEnvelope::upstream("vrf_key_hash missing from Koios response"))?,
-        pledge_lovelace: p.pledge
+        vrf_key_hash: p.vrf_key_hash.clone().ok_or(ErrorEnvelope::upstream(
+            "vrf_key_hash missing from Koios response",
+        ))?,
+        pledge_lovelace: p
+            .pledge
             .as_ref()
             .and_then(|s| s.parse().ok())
             .ok_or(ErrorEnvelope::upstream("pledge missing or not a u64"))?,
-        margin: p.margin.ok_or(ErrorEnvelope::upstream("margin missing from Koios response"))?,
-        fixed_cost_lovelace: p.fixed_cost
+        margin: p.margin.ok_or(ErrorEnvelope::upstream(
+            "margin missing from Koios response",
+        ))?,
+        fixed_cost_lovelace: p
+            .fixed_cost
             .as_ref()
             .and_then(|s| s.parse().ok())
             .ok_or(ErrorEnvelope::upstream("fixed_cost missing or not a u64"))?,
-        reward_address: p.reward_addr.clone().ok_or(ErrorEnvelope::upstream("reward_addr missing from Koios response"))?,
+        reward_address: p.reward_addr.clone().ok_or(ErrorEnvelope::upstream(
+            "reward_addr missing from Koios response",
+        ))?,
         owners: p.owners.clone(),
         relays: p.relays.clone(),
         metadata_url: p.meta_url.clone(),
@@ -195,8 +212,8 @@ fn margin_rational_from_f64(margin: f64) -> Option<(u64, u64)> {
 /// tie-break on `block_time` when two registrations activate in the same
 /// epoch: a same-epoch resubmission supersedes the earlier one on
 /// Cardano, so the one that landed last wins. (The pick stays
-/// order-independent — `/pool_updates` is paged with an explicit
-/// `order` only to keep pagination stable — so the activation epoch
+/// order-independent, `/pool_updates` is paged with an explicit
+/// `order` only to keep pagination stable, so the activation epoch
 /// alone is not a total pick.)
 pub(crate) fn select_registrations(
     updates: &[koios::PoolUpdate],
@@ -222,19 +239,28 @@ pub(crate) async fn pool_current(
         .pool_id
         .clone()
         .ok_or(ErrorEnvelope::not_configured("pool not configured"))?;
-    let payment_address = cfg.payment_address.clone().ok_or(ErrorEnvelope::not_configured("payment_address not configured",))?;
+    let payment_address = cfg
+        .payment_address
+        .clone()
+        .ok_or(ErrorEnvelope::not_configured(
+            "payment_address not configured",
+        ))?;
 
-    let pool = koios::pool_info(&app.http, &app.koios_base_url, &pool_id).await.map_err(|e| {
-        error!(error = %e, "koios pool_info failed");
-        ErrorEnvelope::upstream("upstream service unavailable")
-    })?;
+    let pool = koios::pool_info(&app.http, &app.koios_base_url, &pool_id)
+        .await
+        .map_err(|e| {
+            error!(error = %e, "koios pool_info failed");
+            ErrorEnvelope::upstream("upstream service unavailable")
+        })?;
 
     // Fetch tip up-front: the current epoch is needed to split the
     // pool_updates history into "currently active" and "pending".
-    let tip = koios::tip(&app.http, &app.koios_base_url).await.map_err(|e| {
-        error!(error = %e, "koios tip failed");
-        ErrorEnvelope::upstream("upstream service unavailable")
-    })?;
+    let tip = koios::tip(&app.http, &app.koios_base_url)
+        .await
+        .map_err(|e| {
+            error!(error = %e, "koios tip failed");
+            ErrorEnvelope::upstream("upstream service unavailable")
+        })?;
 
     // Koios `/pool_info` returns the LATEST registration values regardless
     // of whether the registration is active yet. With a pending update
@@ -243,18 +269,19 @@ pub(crate) async fn pool_current(
     // current vs pending, `/pool_updates` is traversed to pick the
     // latest registration whose active_epoch_no has already been reached.
     let mut pending_updates_unavailable = false;
-    let updates: Vec<koios::PoolUpdate> = match koios::pool_updates(&app.http, &app.koios_base_url, &pool_id).await {
-        Ok(u) => u,
-        Err(e) => {
-            error!(error = %e, "koios pool_updates failed (falling back to pool_info)");
-            // Surface the gap to the operator so a real pending update is
-            // not invisible during a Koios incident — the UI shows a
-            // "pending update info unavailable" banner above the
-            // current-state table.
-            pending_updates_unavailable = true;
-            Vec::new()
-        }
-    };
+    let updates: Vec<koios::PoolUpdate> =
+        match koios::pool_updates(&app.http, &app.koios_base_url, &pool_id).await {
+            Ok(u) => u,
+            Err(e) => {
+                error!(error = %e, "koios pool_updates failed (falling back to pool_info)");
+                // Surface the gap to the operator so a real pending update is
+                // not invisible during a Koios incident: the UI shows a
+                // "pending update info unavailable" banner above the
+                // current-state table.
+                pending_updates_unavailable = true;
+                Vec::new()
+            }
+        };
     let (current_update, pending_update) = select_registrations(&updates, tip.epoch_no);
     let pending_update = pending_update.cloned();
 
@@ -282,14 +309,22 @@ pub(crate) async fn pool_current(
     let is_single_owner = owners.len() == 1;
     let margin_rational = margin_rational_from_f64(margin);
 
-    let (_utxos, _amounts, payment_utxo_total_lovelace) =
+    let (utxos, _amounts, payment_utxo_total_lovelace) =
         crate::util::fetch_payment_utxos(&app.http, &app.koios_base_url, &payment_address).await?;
 
-    let estimated_fee_lovelace = ESTIMATED_POOL_UPDATE_FEE_LOVELACE;
+    let fee_params = crate::util::fee_params(&app).await?;
+    let estimated_fee_lovelace = tx_builder::preview_fee_lovelace(
+        tx_builder::TxKind::PoolUpdate {
+            relays: relays.len(),
+        },
+        utxos.len(),
+        crate::util::input_assets(&utxos)?.len(),
+        &fee_params,
+    );
     let can_cover_fee = payment_utxo_total_lovelace >= estimated_fee_lovelace;
 
     let opcert_start = state::load(&state::state_path()).opcert_start_kes_period;
-    let chain_context = chain_context_from(&tip, &params, opcert_start);
+    let chain_context = chain_context_from(&tip, &params, opcert_start)?;
 
     let pending = pending_update.map(|u| {
         let active_first_slot = params.epoch_first_slot(u.active_epoch_no);
@@ -306,7 +341,8 @@ pub(crate) async fn pool_current(
             owners: u.owners,
             relays: u.relays,
             metadata_url: u.meta_url,
-            metadata_hash: u.meta_hash}
+            metadata_hash: u.meta_hash,
+        }
     });
 
     Ok(Json(PoolParamsCurrent {
@@ -336,10 +372,11 @@ pub(crate) async fn pool_current(
 #[derive(Serialize)]
 pub(crate) struct PoolMetadataHashResponse {
     hash_hex: String,
-    size_bytes: usize}
+    size_bytes: usize,
+}
 
 /// Compute Blake2b-256 over the raw request body. The hash MUST match the
-/// bytes that will be served at the metadata URL — hashing exactly what
+/// bytes that will be served at the metadata URL: hashing exactly what
 /// the SPO uploaded, no re-serialization.
 pub(crate) async fn pool_metadata_hash(
     body: axum::body::Bytes,
@@ -350,7 +387,8 @@ pub(crate) async fn pool_metadata_hash(
     let hash = pallas_crypto::hash::Hasher::<256>::hash(&body);
     Ok(Json(PoolMetadataHashResponse {
         hash_hex: hex::encode(hash),
-        size_bytes: body.len()}))
+        size_bytes: body.len(),
+    }))
 }
 
 #[derive(Deserialize)]
@@ -381,24 +419,26 @@ pub(crate) struct PoolBuildResponse {
 
 #[derive(Deserialize)]
 pub(crate) struct PoolPledgePrecheckQuery {
-    pledge_lovelace: u64}
+    pledge_lovelace: u64,
+}
 
 #[derive(Serialize)]
 pub(crate) struct PoolPledgePrecheckResponse {
     owner_stake_address: String,
     /// Owner's total balance (UTxO + rewards) reported by Koios for the
-    /// stake account. This is the **current** balance — the actual
+    /// stake account. This is the **current** balance: the actual
     /// pledge check at epoch boundary uses the active stake snapshot
     /// taken earlier, so a recent funding event may not yet be reflected.
     owner_balance_lovelace: u64,
     pledge_lovelace: u64,
     meets_pledge: bool,
-    shortfall_lovelace: u64}
+    shortfall_lovelace: u64,
+}
 
 /// Pre-submit check: does the (first) owner's current stake-account
 /// balance cover the proposed new pledge? A pool re-registration that
 /// raises pledge takes effect at the next epoch boundary, but the
-/// protocol verifies the pledge against the active stake snapshot —
+/// protocol verifies the pledge against the active stake snapshot,
 /// which was taken one or two epochs earlier. If the owner just funded
 /// the wallet to cover the new pledge, the snapshot may not yet
 /// reflect that, and the pool drops out of the leader rotation for
@@ -411,13 +451,22 @@ pub(crate) async fn pool_pledge_precheck(
     Query(q): Query<PoolPledgePrecheckQuery>,
 ) -> Result<Json<PoolPledgePrecheckResponse>, ErrorEnvelope> {
     let cfg = app.config.read().unwrap_or_else(|e| e.into_inner()).clone();
-    let pool_id = cfg.pool_id.clone().ok_or(ErrorEnvelope::not_configured("pool not configured",))?;
+    let pool_id = cfg
+        .pool_id
+        .clone()
+        .ok_or(ErrorEnvelope::not_configured("pool not configured"))?;
 
-    let pool = koios::pool_info(&app.http, &app.koios_base_url, &pool_id).await.map_err(|e| {
-        error!(error = %e, "koios pool_info failed");
-        ErrorEnvelope::upstream("upstream service unavailable")
-    })?;
-    let owner = pool.owners.into_iter().next().ok_or(ErrorEnvelope::upstream("pool has no owners on chain",))?;
+    let pool = koios::pool_info(&app.http, &app.koios_base_url, &pool_id)
+        .await
+        .map_err(|e| {
+            error!(error = %e, "koios pool_info failed");
+            ErrorEnvelope::upstream("upstream service unavailable")
+        })?;
+    let owner = pool
+        .owners
+        .into_iter()
+        .next()
+        .ok_or(ErrorEnvelope::upstream("pool has no owners on chain"))?;
 
     let acct_opt = koios::account_info(&app.http, &app.koios_base_url, &owner)
         .await
@@ -425,10 +474,13 @@ pub(crate) async fn pool_pledge_precheck(
             error!(error = %e, "koios account_info(owner) failed");
             ErrorEnvelope::upstream("upstream service unavailable")
         })?;
-    let acct = acct_opt.ok_or(ErrorEnvelope::upstream("owner stake address not found on Koios",))?;
-    let owner_balance: u64 = acct.total_balance.parse().map_err(|_| {
-        ErrorEnvelope::upstream("unexpected total_balance format from upstream")
-    })?;
+    let acct = acct_opt.ok_or(ErrorEnvelope::upstream(
+        "owner stake address not found on Koios",
+    ))?;
+    let owner_balance: u64 = acct
+        .total_balance
+        .parse()
+        .map_err(|_| ErrorEnvelope::upstream("unexpected total_balance format from upstream"))?;
 
     let meets_pledge = owner_balance >= q.pledge_lovelace;
     let shortfall_lovelace = q.pledge_lovelace.saturating_sub(owner_balance);
@@ -438,18 +490,27 @@ pub(crate) async fn pool_pledge_precheck(
         owner_balance_lovelace: owner_balance,
         pledge_lovelace: q.pledge_lovelace,
         meets_pledge,
-        shortfall_lovelace}))
+        shortfall_lovelace,
+    }))
 }
 
 pub(crate) async fn pool_build(
     State(app): State<Arc<AppState>>,
     Json(body): Json<PoolBuildBody>,
 ) -> Result<Json<PoolBuildResponse>, ErrorEnvelope> {
-    let crate::util::StartHandlerCtx { params, own_sk, peer_pk, cfg: _, pool_id, payment_address } =
-        crate::util::start_handler_ctx(&app, &body.pin)?;
+    let crate::util::StartHandlerCtx {
+        params,
+        own_sk,
+        peer_pk,
+        cfg: _,
+        pool_id,
+        payment_address,
+    } = crate::util::start_handler_ctx(&app, &body.pin)?;
 
     if body.margin_denominator == 0 || body.margin_numerator > body.margin_denominator {
-        return Err(ErrorEnvelope::invalid("margin must satisfy 0 ≤ numerator ≤ denominator and denominator > 0",));
+        return Err(ErrorEnvelope::invalid(
+            "margin must satisfy 0 ≤ numerator ≤ denominator and denominator > 0",
+        ));
     }
 
     let (metadata_url, metadata_hash_hex) =
@@ -460,16 +521,20 @@ pub(crate) async fn pool_build(
 
     // Current on-chain pool params: operator + vrf_keyhash + owners are
     // taken as-is (read-only in v1.0).
-    let pool = koios::pool_info(&app.http, &app.koios_base_url, &pool_id).await.map_err(|e| {
-        error!(error = %e, "koios pool_info failed");
-        ErrorEnvelope::upstream("upstream service unavailable")
-    })?;
-    let vrf_keyhash_hex = pool.vrf_key_hash.clone().ok_or(ErrorEnvelope::upstream("vrf_key_hash missing from Koios response",))?;
+    let pool = koios::pool_info(&app.http, &app.koios_base_url, &pool_id)
+        .await
+        .map_err(|e| {
+            error!(error = %e, "koios pool_info failed");
+            ErrorEnvelope::upstream("upstream service unavailable")
+        })?;
+    let vrf_keyhash_hex = pool.vrf_key_hash.clone().ok_or(ErrorEnvelope::upstream(
+        "vrf_key_hash missing from Koios response",
+    ))?;
     if pool.owners.len() != 1 {
         return Err(ErrorEnvelope::invalid(format!(
-                "v1.0 supports single-owner pools only (chain has {} owners)",
-                pool.owners.len()
-            ),));
+            "v1.0 supports single-owner pools only (chain has {} owners)",
+            pool.owners.len()
+        )));
     }
     let owners = pool.owners.clone();
 
@@ -486,18 +551,19 @@ pub(crate) async fn pool_build(
         })
         .collect();
     if utxo_inputs.is_empty() {
-        return Err(ErrorEnvelope::insufficient_funds("no UTXOs at payment address"));
+        return Err(ErrorEnvelope::insufficient_funds(
+            "no UTXOs at payment address",
+        ));
     }
 
-    let fee_lovelace = ESTIMATED_POOL_UPDATE_FEE_LOVELACE;
-    if utxo_total < fee_lovelace {
-        return Err(ErrorEnvelope::insufficient_funds("payment address cannot cover fee"));
-    }
+    let fee_params = crate::util::fee_params(&app).await?;
 
-    let tip = koios::tip(&app.http, &app.koios_base_url).await.map_err(|e| {
-        error!(error = %e, "koios tip failed");
-        ErrorEnvelope::upstream("upstream service unavailable")
-    })?;
+    let tip = koios::tip(&app.http, &app.koios_base_url)
+        .await
+        .map_err(|e| {
+            error!(error = %e, "koios tip failed");
+            ErrorEnvelope::upstream("upstream service unavailable")
+        })?;
     let ttl_slot = tip.abs_slot.saturating_add(TTL_MARGIN_SLOTS);
 
     let change_assets = crate::util::input_assets(&utxos)?;
@@ -518,12 +584,13 @@ pub(crate) async fn pool_build(
         relays: &relay_inputs,
         metadata_url: metadata_url.as_deref(),
         metadata_hash_hex: metadata_hash_hex.as_deref(),
-        fee_lovelace,
-        ttl_slot};
+        fee_params,
+        ttl_slot,
+    };
     let built = tx_builder::build_pool_update_body(&inputs).map_err(|e| match e {
-        tx_builder::TxBuildError::InsufficientInputs { .. } => ErrorEnvelope::insufficient_funds(
-            "payment address cannot cover fee + min-ADA change",
-        ),
+        tx_builder::TxBuildError::InsufficientInputs { .. } => {
+            ErrorEnvelope::insufficient_funds("payment address cannot cover fee + min-ADA change")
+        }
         // Relay DNS name / metadata URL over the CDDL cap: operator-typed
         // input, so surface the actionable message as invalid_input
         // instead of an opaque internal error.
@@ -535,14 +602,16 @@ pub(crate) async fn pool_build(
             }
         },
     })?;
+    let fee_lovelace = built.fee_lovelace;
 
     let body_hash = pallas_crypto::hash::Hasher::<256>::hash(&built.body_cbor);
     let body_hash_hex = hex::encode(body_hash);
 
     let opcert_start = state::load(&state::state_path()).opcert_start_kes_period;
-    let chain_context = chain_context_from(&tip, &params, opcert_start);
+    let chain_context = chain_context_from(&tip, &params, opcert_start)?;
 
-    let request_inputs = crate::util::build_request_inputs(&utxo_inputs, &utxo_amounts, &payment_address);
+    let request_inputs =
+        crate::util::build_request_inputs(&utxo_inputs, &utxo_amounts, &payment_address);
     let mut request = shared::pool_update::PoolUpdateRequest {
         kind: shared::wire_kind::WireKind::PoolUpdate,
         tx_body_cbor_hex: hex::encode(&built.body_cbor),
@@ -563,11 +632,16 @@ pub(crate) async fn pool_build(
         metadata_hash_hex,
         inputs: request_inputs,
         operator_pin_proof: String::new(),
-        chain_context};
+        chain_context,
+    };
 
     let body_fp = shared::request_body_fp(&request);
-    request.operator_pin_proof =
-        shared::pin::pin_proof_hex(&body.pin, request.kind.wire_str(), request.chain_context.built_at_unix, &body_fp);
+    request.operator_pin_proof = shared::pin::pin_proof_hex(
+        &body.pin,
+        request.kind.wire_str(),
+        request.chain_context.built_at_unix,
+        &body_fp,
+    );
 
     let (_json_bytes, ur_fragments, request_fingerprint) =
         shared::wire_io::build_sign_request(&request, &own_sk, &peer_pk)?;
@@ -576,7 +650,8 @@ pub(crate) async fn pool_build(
         request,
         body_hash_hex,
         ur_fragments,
-        request_fingerprint}))
+        request_fingerprint,
+    }))
 }
 
 pub(crate) fn parse_ipv4(s: &str) -> Result<[u8; 4], ErrorEnvelope> {
@@ -628,14 +703,17 @@ fn translate_relays(
 /// Validate the optional pool-metadata pair: URL and hash must be present
 /// together (or both absent), and the hash must be 64 hex chars. Mirrors
 /// `parse_anchor` in `vote.rs`. `tx_builder::build_pool_update_body` also
-/// rejects a partial pair, but only as an opaque internal error — catching
+/// rejects a partial pair, but only as an opaque internal error: catching
 /// it here surfaces an operator-actionable invalid_input before the
 /// signing ceremony.
 fn parse_pool_metadata(
     url: &Option<String>,
     hash_hex: &Option<String>,
 ) -> Result<Option<(String, String)>, ErrorEnvelope> {
-    match (url.as_deref().map(str::trim), hash_hex.as_deref().map(str::trim)) {
+    match (
+        url.as_deref().map(str::trim),
+        hash_hex.as_deref().map(str::trim),
+    ) {
         (None, None) | (Some(""), Some("")) | (Some(""), None) | (None, Some("")) => Ok(None),
         (Some(u), Some(h)) if !u.is_empty() && !h.is_empty() => {
             if h.len() != 64 || !h.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -654,7 +732,8 @@ fn parse_pool_metadata(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PoolResultBody {
-    ur_fragments: Vec<String>}
+    ur_fragments: Vec<String>,
+}
 
 pub(crate) async fn pool_result(
     State(app): State<Arc<AppState>>,
@@ -664,11 +743,17 @@ pub(crate) async fn pool_result(
         return Err(ErrorEnvelope::invalid("no UR fragments"));
     }
     let (own_sk, peer_pk) = paired_keys_or_err(&app)?;
-    let json_bytes = ur_decode_required(&body.ur_fragments, &peer_pk, &own_sk, shared::qr::Direction::Response)?;
-    let result: shared::pool_update::PoolUpdateResult = serde_json::from_slice(&json_bytes).map_err(|e| {
-        error!(error = %e, "invalid request payload");
-        ErrorEnvelope::invalid("invalid request payload")
-    })?;
+    let json_bytes = ur_decode_required(
+        &body.ur_fragments,
+        &peer_pk,
+        &own_sk,
+        shared::qr::Direction::Response,
+    )?;
+    let result: shared::pool_update::PoolUpdateResult = serde_json::from_slice(&json_bytes)
+        .map_err(|e| {
+            error!(error = %e, "invalid request payload");
+            ErrorEnvelope::invalid("invalid request payload")
+        })?;
     Ok(Json(result))
 }
 
@@ -768,8 +853,7 @@ mod tests {
             None
         );
         assert_eq!(
-            parse_pool_metadata(&Some("https://x/meta.json".into()), &Some(hash.clone()))
-                .unwrap(),
+            parse_pool_metadata(&Some("https://x/meta.json".into()), &Some(hash.clone())).unwrap(),
             Some(("https://x/meta.json".into(), hash.clone()))
         );
         assert!(parse_pool_metadata(&Some("https://x/meta.json".into()), &None).is_err());
@@ -783,4 +867,3 @@ mod tests {
         assert!(parse_pool_metadata(&url, &Some("zz".repeat(32))).is_err());
     }
 }
-

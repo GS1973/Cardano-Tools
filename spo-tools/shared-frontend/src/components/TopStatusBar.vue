@@ -11,7 +11,7 @@
         <slot name="first-status" />
         <div class="status-item">
           <span class="status-label">Epoch</span>
-          <span class="status-value">{{ epoch ?? '—' }}</span>
+          <span class="status-value">{{ epoch ?? 'n/a' }}</span>
         </div>
         <div class="status-item">
           <span class="status-label">Epoch ends</span>
@@ -19,7 +19,7 @@
         </div>
         <div class="status-item">
           <span class="status-label">Current KES</span>
-          <span class="status-value">{{ kesPeriod ?? '—' }}</span>
+          <span class="status-value">{{ kesPeriod ?? 'n/a' }}</span>
         </div>
         <div class="status-item">
           <span class="status-label">KES ends</span>
@@ -30,7 +30,7 @@
           :class="{ 'pairing-ok': paired === true, 'pairing-bad': paired === false }"
           role="button"
           tabindex="0"
-          :title="paired === true ? `Paired (${pairingFingerprint})` : 'Not paired — click to pair'"
+          :title="paired === true ? `Paired (${pairingFingerprint})` : 'Not paired: click to pair'"
           @click="goToPairing"
           @keydown.enter="goToPairing"
         >
@@ -59,7 +59,7 @@ const props = defineProps<{
 const nowUnix = ref(Math.floor(Date.now() / 1000))
 
 function fmtCountdown(target: number | null): string {
-  if (target == null) return '—'
+  if (target == null) return 'n/a'
   const remaining = target - nowUnix.value
   if (remaining <= 0) return 'expired'
   const days = Math.floor(remaining / 86400)

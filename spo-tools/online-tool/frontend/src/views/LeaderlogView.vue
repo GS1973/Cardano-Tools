@@ -107,7 +107,7 @@
   <v-card ref="resultCardEl" v-if="result">
     <v-card-text>
       <h3 class="text-subtitle-1 mt-0 mb-2">
-        Schedule for epoch {{ result.epoch }} — {{ result.count }} block(s)
+        Schedule for epoch {{ result.epoch }}: {{ result.count }} block(s)
       </h3>
       <v-table density="compact">
         <thead>
@@ -343,7 +343,7 @@ async function submitPasted() {
 function formatUtc(unix: number): string {
   return new Date(unix * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' UTC')
 }
-// The operator's own timezone, resolved by the browser — shown in the
+// The operator's own timezone, resolved by the browser: shown in the
 // column header so the times cannot be mistaken for another zone.
 const localTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
 
@@ -371,7 +371,7 @@ async function checkNextNonceAvailability() {
     const epochEnds = Number(data.epoch_ends_at_unix)
     if (!Number.isFinite(epochEnds)) return
     // Mainnet randomness-stabilisation window = 4k/f slots = 172_800
-    // slots ≈ 48 hours (Praos, post-Vasil — TPraos used 3k/f). Mirrors
+    // slots ≈ 48 hours (Praos, post-Vasil: TPraos used 3k/f). Mirrors
     // stability_window_slots in online-tool/src/koios.rs; mainnet slots
     // are 1 second, so slots == seconds.
     const stabilityWindowSec = 172_800

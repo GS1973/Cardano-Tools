@@ -7,7 +7,7 @@
 # the SPO crates gets re-written into scattered locations and the cross-file
 # import is a (broken) relative path. A plain `cargo test --workspace` runs
 # the export tests in parallel, which both truncates the per-type file (a
-# write race) and leaves the broken relative import — never commit those.
+# write race) and leaves the broken relative import, never commit those.
 # The committed bindings are produced ONLY by this script, which:
 #   0. refreshes airgap-core's canonical core-wire.ts (the neutral types),
 #   1. regenerates the SPO bindings single-threaded (no truncation race),
@@ -23,10 +23,8 @@
 # source instead of rewriting them: it regenerates the SPO bindings, diffs
 # them against the working tree, restores the tree, and exits non-zero on
 # drift. Run it locally before committing a wire-type change; it is also
-# the command CI's "Frontend type-binding drift" step runs. That step lives
-# in the build-test job, which is gated behind the AIRGAP_CORE_WIRED
-# repository variable until airgap-core is published and checked out
-# alongside this repo.
+# the command the monorepo CI's "Frontend type-binding drift" step runs
+# (airgap-core sits beside this folder there, as it does in development).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

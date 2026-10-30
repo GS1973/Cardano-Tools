@@ -1,7 +1,7 @@
 use crate::{config, koios, tx_builder, AppState};
+use serde::Serialize;
 use shared::chain_context::ChainContext;
 use shared::error::ErrorEnvelope;
-use serde::Serialize;
 use std::sync::Arc;
 use tracing::error;
 
@@ -13,17 +13,37 @@ pub(crate) fn paired_keys_or_err(
 ) -> Result<(zeroize::Zeroizing<[u8; 32]>, [u8; 32]), ErrorEnvelope> {
     let cfg = state.config.read().unwrap_or_else(|e| e.into_inner());
     config::paired_keys(&cfg).ok_or_else(|| {
-        ErrorEnvelope::not_paired(
-            "online tool is not paired with a signer — open Pairing first",
-        )
+        ErrorEnvelope::not_paired("online tool is not paired with a signer. Open Pairing first")
     })
 }
 
-pub(crate) fn now_unix_ts() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+/// A Unix-timestamp floor below which the clock is treated as unset rather
+/// than as a real time (2024-01-01 UTC, the same floor the signer uses).
+const MIN_PLAUSIBLE_NOW_UNIX: u64 = 1_704_067_200;
+
+/// Accept a wall-clock reading only when it can be a real time. `None` is a
+/// clock before the UNIX epoch. A request stamped by an unset clock would be
+/// refused by the signer as stale after the air-gap round trip; refusing it
+/// here names the actual cause.
+fn plausible_now(secs: Option<u64>) -> Result<u64, ErrorEnvelope> {
+    match secs {
+        Some(s) if s >= MIN_PLAUSIBLE_NOW_UNIX => Ok(s),
+        other => {
+            error!(now = ?other, "system clock is unset or implausible");
+            Err(ErrorEnvelope::internal(
+                "this machine's clock looks unset (reads before 2024). Set the clock, then retry",
+            ))
+        }
+    }
+}
+
+pub(crate) fn now_unix_ts() -> Result<u64, ErrorEnvelope> {
+    plausible_now(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_secs()),
+    )
 }
 
 /// Build a ChainContext snapshot from a freshly-fetched tip plus the
@@ -34,8 +54,8 @@ pub(crate) fn chain_context_from(
     tip: &koios::Tip,
     params: &koios::GenesisParams,
     opcert_start_kes_period: Option<u64>,
-) -> ChainContext {
-    ChainContext {
+) -> Result<ChainContext, ErrorEnvelope> {
+    Ok(ChainContext {
         current_epoch: tip.epoch_no,
         current_slot: tip.abs_slot,
         current_kes_period: params.slot_to_kes_period(tip.abs_slot),
@@ -43,8 +63,8 @@ pub(crate) fn chain_context_from(
             params.epoch_first_slot(tip.epoch_no.saturating_add(1)),
         ),
         opcert_expires_at_unix: opcert_start_kes_period.map(|s| params.opcert_expires_at_unix(s)),
-        built_at_unix: now_unix_ts(),
-    }
+        built_at_unix: now_unix_ts()?,
+    })
 }
 
 /// Fetch all UTXOs at the given payment address, parse each `value`
@@ -68,9 +88,10 @@ pub(crate) async fn fetch_payment_utxos(
     let mut amounts: Vec<u64> = Vec::with_capacity(utxos.len());
     let mut total: u64 = 0;
     for u in &utxos {
-        let v: u64 = u.value.parse().map_err(|_| {
-            ErrorEnvelope::upstream("utxo value not a u64")
-        })?;
+        let v: u64 = u
+            .value
+            .parse()
+            .map_err(|_| ErrorEnvelope::upstream("utxo value not a u64"))?;
         total = total.saturating_add(v);
         amounts.push(v);
     }
@@ -86,7 +107,8 @@ pub(crate) fn input_assets(
     let mut all: Vec<shared::asset::Asset> = Vec::new();
     for u in utxos {
         all.extend(
-            u.assets().map_err(|_| ErrorEnvelope::upstream("utxo asset quantity not a u64"))?,
+            u.assets()
+                .map_err(|_| ErrorEnvelope::upstream("utxo asset quantity not a u64"))?,
         );
     }
     shared::tx::change_assets(&all, &[])
@@ -151,7 +173,9 @@ pub(crate) fn start_handler_ctx(
     let payment_address = cfg
         .payment_address
         .clone()
-        .ok_or(ErrorEnvelope::not_configured("payment_address not configured"))?;
+        .ok_or(ErrorEnvelope::not_configured(
+            "payment_address not configured",
+        ))?;
     Ok(StartHandlerCtx {
         params,
         own_sk,
@@ -177,7 +201,6 @@ pub(crate) struct WithdrawSubmitResponse {
     pub(crate) signed_tx_size_bytes: usize,
 }
 
-
 /// Witness pair as it arrives over the HTTP wire (hex-encoded). Common
 /// shape across withdraw/drep/pool submit endpoints.
 #[derive(serde::Deserialize)]
@@ -187,7 +210,7 @@ pub(crate) struct SubmitWitnessHex {
 }
 
 /// Common /api/*/submit body: a built tx body in hex + a list of witnesses.
-/// Same shape across withdraw/drep/pool — only the surrounding handler
+/// Same shape across withdraw/drep/pool, only the surrounding handler
 /// differs in role-validation, which lives in shared::witness now.
 #[derive(serde::Deserialize)]
 pub(crate) struct SubmitTxBody {
@@ -261,12 +284,11 @@ pub(crate) async fn submit_signed_tx(
     })
 }
 
-
 // ---------------------------------------------------------------------------
-// Rationale anchor-hash helper. Ported from DRep Tools' manifest-hash handler
-// so the SPO vote view has the same "Compute hash" button: fetch the rationale
-// document at `url` and return the blake2b-256 of its raw bytes (the CIP-100
-// anchor hash). Hashes the document content, never the URL string.
+// Rationale anchor-hash helper for the "Compute hash" button of the vote
+// view: fetch the rationale document at `url` and return the blake2b-256 of
+// its raw bytes (the CIP-100 anchor hash), through the guarded document
+// client (`airgap_fetch_guard::document_hash`, shared with DRep Tools).
 // ---------------------------------------------------------------------------
 
 #[derive(serde::Deserialize)]
@@ -285,53 +307,60 @@ pub(crate) async fn rationale_hash_handler(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     axum::Json(body): axum::Json<RationaleHashBody>,
 ) -> axum::Json<RationaleHashResponse> {
-    const MAX_RATIONALE_BYTES: usize = 1024 * 1024;
-    let url = body.url.trim();
-    if !(url.starts_with("https://") || url.starts_with("http://")) {
-        return axum::Json(RationaleHashResponse::Error {
-            message: "URL must start with http:// or https://".into(),
-        });
-    }
-    let resp = match state.http.get(url).send().await {
-        Ok(r) => r,
+    match airgap_fetch_guard::document_hash(&state.doc_http, &body.url).await {
+        Ok((hash, byte_len)) => axum::Json(RationaleHashResponse::Ok {
+            hash_hex: hex::encode(hash),
+            byte_len,
+        }),
         Err(e) => {
-            error!(error = %e, "rationale fetch failed");
-            return axum::Json(RationaleHashResponse::Error {
-                message: "could not fetch the rationale URL".into(),
-            });
+            if let airgap_fetch_guard::DocumentError::Fetch(ref err)
+            | airgap_fetch_guard::DocumentError::Read(ref err) = e
+            {
+                error!(error = %err, "rationale fetch failed");
+            }
+            axum::Json(RationaleHashResponse::Error {
+                message: e.describe("rationale"),
+            })
         }
-    };
-    if !resp.status().is_success() {
-        return axum::Json(RationaleHashResponse::Error {
-            message: format!("rationale URL returned HTTP {}", resp.status().as_u16()),
-        });
     }
-    if resp
-        .content_length()
-        .map(|l| l as usize > MAX_RATIONALE_BYTES)
-        .unwrap_or(false)
-    {
-        return axum::Json(RationaleHashResponse::Error {
-            message: "rationale is larger than 1 MiB".into(),
-        });
-    }
-    let bytes = match koios::read_capped(resp, MAX_RATIONALE_BYTES + 1).await {
-        Ok(b) => b,
-        Err(e) => {
-            error!(error = %e, "rationale body read failed");
-            return axum::Json(RationaleHashResponse::Error {
-                message: "could not read the rationale body".into(),
-            });
+}
+
+/// Live fee parameters for building a transaction, read from the chain-data
+/// provider and checked against the constitution's guardrails
+/// (`koios::protocol_params`).
+pub(crate) async fn fee_params(
+    app: &Arc<AppState>,
+) -> Result<tx_builder::FeeParams, ErrorEnvelope> {
+    let p = koios::protocol_params(&app.http, &app.koios_base_url).await.map_err(|e| {
+        error!(error = %e, "koios protocol_params failed");
+        match e {
+            koios::KoiosError::OutOfBand { name, .. } => ErrorEnvelope::upstream(format!(
+                "the chain-data provider returned a protocol parameter ({name}) outside the range the network allows. Not building a transaction from it."
+            )),
+            _ => ErrorEnvelope::upstream("upstream service unavailable"),
         }
-    };
-    if bytes.len() > MAX_RATIONALE_BYTES {
-        return axum::Json(RationaleHashResponse::Error {
-            message: "rationale is larger than 1 MiB".into(),
-        });
-    }
-    let hash = pallas_crypto::hash::Hasher::<256>::hash(&bytes);
-    axum::Json(RationaleHashResponse::Ok {
-        hash_hex: hex::encode(hash),
-        byte_len: bytes.len(),
+    })?;
+    Ok(tx_builder::FeeParams {
+        min_fee_a: p.min_fee_a,
+        min_fee_b: p.min_fee_b,
+        utxo_cost_per_byte: p.utxo_cost_per_byte,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unset_clock_is_an_error_not_a_zero_timestamp() {
+        assert_eq!(plausible_now(Some(1_790_000_000)).unwrap(), 1_790_000_000);
+        assert_eq!(
+            plausible_now(Some(MIN_PLAUSIBLE_NOW_UNIX)).unwrap(),
+            MIN_PLAUSIBLE_NOW_UNIX
+        );
+        assert!(plausible_now(Some(MIN_PLAUSIBLE_NOW_UNIX - 1)).is_err());
+        assert!(plausible_now(Some(0)).is_err());
+        assert!(plausible_now(None).is_err());
+        assert!(now_unix_ts().is_ok(), "this machine's clock is set");
+    }
 }

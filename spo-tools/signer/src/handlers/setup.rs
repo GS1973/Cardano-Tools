@@ -1,4 +1,4 @@
-//! Setup endpoints — read / write signer config + per-key validation.
+//! Setup endpoints: read / write signer config + per-key validation.
 //!
 //! `/api/signer-config` returns a redacted view (paths / hex secrets are
 //! never reflected back to the client). `/api/test-load` validates a
@@ -9,7 +9,7 @@ use crate::{config, validate};
 use shared::error::ErrorEnvelope;
 
 // ============================================================
-// Setup endpoints — read / write signer config + per-key validation
+// Setup endpoints: read / write signer config + per-key validation
 // ============================================================
 
 #[derive(serde::Serialize)]
@@ -82,10 +82,12 @@ fn vetted_key_path(field: &'static str, value: &mut Option<String>) -> Result<()
     if trimmed.is_empty() {
         return Ok(());
     }
-    let canonical = std::path::PathBuf::from(trimmed).canonicalize().map_err(|e| {
-        tracing::error!(error = %e, field, "signer-config canonicalize failed");
-        ErrorEnvelope::invalid(format!("{field}: path does not exist"))
-    })?;
+    let canonical = std::path::PathBuf::from(trimmed)
+        .canonicalize()
+        .map_err(|e| {
+            tracing::error!(error = %e, field, "signer-config canonicalize failed");
+            ErrorEnvelope::invalid(format!("{field}: path does not exist"))
+        })?;
     let allowed = crate::handlers::list_dir::list_dir_allowed_roots();
     if !allowed.iter().any(|root| canonical.starts_with(root)) {
         tracing::error!(path = %canonical.display(), field, "signer-config path outside allow-list");
@@ -105,9 +107,9 @@ fn vetted_key_path(field: &'static str, value: &mut Option<String>) -> Result<()
 }
 
 /// Merge a Setup POST body over the existing on-disk config. The X25519
-/// crypto fields are never accepted from the body — the pairing handlers
+/// crypto fields are never accepted from the body, the pairing handlers
 /// are their only writers (they reject low-order peer points and require
-/// the operator-confirmed fingerprint) — so they are always carried over
+/// the operator-confirmed fingerprint), so they are always carried over
 /// from disk, and anything the client supplied is discarded.
 fn merge_setup_body(
     body: config::SignerConfig,
@@ -235,7 +237,7 @@ mod tests {
 
     #[test]
     fn vetted_key_path_rejects_existing_path_outside_roots() {
-        // An existing, readable file outside /media, /mnt, /run/media —
+        // An existing, readable file outside /media, /mnt, /run/media:
         // exactly the probe shape the allow-list forecloses.
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("vrf.skey");
@@ -249,4 +251,3 @@ mod tests {
         );
     }
 }
-

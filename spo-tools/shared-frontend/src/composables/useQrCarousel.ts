@@ -10,7 +10,7 @@ import { useNotificationStore } from '@spo-tools/shared-frontend/stores/notifica
  * Send-side QR carousel state + lifecycle for an operational view.
  *
  * Reactive carousel only: fragments / index / dataUrl + start/stop/reset
- * + clipboard copy. Camera-scanner state lives in `useScannerControl` —
+ * + clipboard copy. Camera-scanner state lives in `useScannerControl`:
  * a view that needs both calls them as two separate composables, which
  * keeps each one independently testable.
  *

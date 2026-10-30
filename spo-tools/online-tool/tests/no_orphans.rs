@@ -1,5 +1,5 @@
-//! Repository-structure guard: every `.rs` file under `src/` — including the
-//! handlers in `src/handlers/` — must be wired into the module tree via a
+//! Repository-structure guard: every `.rs` file under `src/`, including the
+//! handlers in `src/handlers/`, must be wired into the module tree via a
 //! `mod` declaration in its parent module file (`main.rs` at the crate root,
 //! `mod.rs` inside subdirectories). A stale, uncompiled duplicate of a
 //! security-critical handler would otherwise sit on disk with no compiler
@@ -8,8 +8,8 @@
 
 use std::path::Path;
 
-/// True when `module_src` declares module `name` — `mod name;`,
-/// `pub(...) mod name;` or an inline `mod name {` — matched on token
+/// True when `module_src` declares module `name`: `mod name;`,
+/// `pub(...) mod name;` or an inline `mod name {`: matched on token
 /// boundaries, with `//` comments stripped so a commented-out declaration
 /// does not count as wired.
 fn declares_mod(module_src: &str, name: &str) -> bool {

@@ -11,7 +11,7 @@
 .DS_Store
 Thumbs.db
 
-# Local env / secrets — never commit
+# Local env / secrets, never commit
 .env
 .env.local
 *.skey

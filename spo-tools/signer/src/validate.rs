@@ -5,7 +5,7 @@
 //! verify the byte-length matches what that role expects.
 //!
 //! This is the same path as the actual signing flow takes when it loads
-//! a key — so a successful validation is a strong "this WILL load when
+//! a key, so a successful validation is a strong "this WILL load when
 //! you sign" signal.
 
 use serde::Serialize;
@@ -56,7 +56,7 @@ pub fn validate(path: Option<&str>, expected: KeyKind) -> ValidationResult {
                 );
                 ValidationResult::WrongRole
             }
-        }
+        },
         Err(e) => ValidationResult::Error {
             message: friendly_error(&e),
         },
@@ -85,22 +85,16 @@ impl KeyKind {
     }
 }
 
-fn friendly_error(e: &KeyLoadError) -> String {
+/// The one description of a key-load failure, used by Setup and by the
+/// signing path alike. It never echoes file content: everything except the
+/// permission hint comes from the loader's own redacted form (a parse error
+/// can quote the file, a hex error the offending character, and a header
+/// mismatch the first bytes of what may be a raw key).
+pub(crate) fn friendly_error(e: &KeyLoadError) -> String {
     match e {
-        KeyLoadError::Io(io) if io.kind() == std::io::ErrorKind::NotFound => {
-            "file not found".into()
-        }
         KeyLoadError::Io(io) if io.kind() == std::io::ErrorKind::PermissionDenied => {
-            "permission denied — is the encrypted USB mounted with read access?".into()
+            "permission denied: is the encrypted USB mounted with read access?".into()
         }
-        // Redact serde_json error detail — it can echo a snippet of the
-        // file contents at the parse-error location, which an attacker
-        // chaining a same-origin XSS could turn into a file-content
-        // oracle for arbitrary paths the signer process can read.
-        KeyLoadError::Json(_) => "file is not valid cardano-cli skey JSON".into(),
-        KeyLoadError::InsecureMode { mode } => format!(
-            "skey file is readable by group or other (mode 0o{mode:o}); chmod 600 before retrying"
-        ),
-        _ => e.to_string(),
+        _ => e.redacted(),
     }
 }

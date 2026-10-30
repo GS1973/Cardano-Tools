@@ -1,26 +1,28 @@
 use crate::{koios, AppState};
-use shared::error::ErrorEnvelope;
 use axum::{extract::State, Json};
 use serde::Serialize;
+use shared::error::ErrorEnvelope;
 use std::sync::Arc;
 use tracing::{error, info};
 
 #[derive(Serialize)]
 pub(crate) struct GenesisStatus {
     /// Whether protocol params are currently available. If `false`, KES
-    /// endpoints will return 503 — call `POST /api/genesis/refresh` to
+    /// endpoints will return 503: call `POST /api/genesis/refresh` to
     /// retry the Koios fetch.
     loaded: bool,
-    params: Option<koios::GenesisParams>}
+    params: Option<koios::GenesisParams>,
+}
 
 pub(crate) async fn genesis_status(State(state): State<Arc<AppState>>) -> Json<GenesisStatus> {
     let params = *state.genesis.lock().unwrap_or_else(|e| e.into_inner());
     Json(GenesisStatus {
         loaded: params.is_some(),
-        params})
+        params,
+    })
 }
 
-/// POST /api/genesis/refresh — retry the Koios `/genesis` fetch and
+/// POST /api/genesis/refresh: retry the Koios `/genesis` fetch and
 /// install the result. Used by the UI when the initial startup fetch
 /// failed and Koios has since come back online.
 pub(crate) async fn genesis_refresh(
@@ -28,7 +30,12 @@ pub(crate) async fn genesis_refresh(
 ) -> Result<Json<GenesisStatus>, ErrorEnvelope> {
     let params = koios::fetch_genesis_params(&state.http, &state.koios_base_url).await.map_err(|e| {
         error!(error = %e, "manual genesis refresh failed");
-        ErrorEnvelope::upstream("upstream service unavailable")
+        match e {
+            koios::KoiosError::NotMainnetGenesis(_) => ErrorEnvelope::upstream(
+                "the chain-data provider returned genesis values that are not mainnet's. Not using them.",
+            ),
+            _ => ErrorEnvelope::upstream("upstream service unavailable"),
+        }
     })?;
     let mut prev = state.genesis.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(old) = *prev {
@@ -41,13 +48,14 @@ pub(crate) async fn genesis_refresh(
         }
     }
     *prev = Some(params);
-    // See comment in main.rs:fetch_genesis_params caller — `?params` is
+    // See comment in main.rs:fetch_genesis_params caller: `?params` is
     // safe today because GenesisParams contains only public Cardano
     // protocol constants. Curate the field list if that ever changes.
     info!(?params, "genesis params refreshed");
     Ok(Json(GenesisStatus {
         loaded: true,
-        params: Some(params)}))
+        params: Some(params),
+    }))
 }
 
 // GenesisParams must be Serialize for the genesis_status endpoint.
@@ -62,4 +70,3 @@ impl Serialize for koios::GenesisParams {
         s.end()
     }
 }
-

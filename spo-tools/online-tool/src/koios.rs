@@ -51,6 +51,30 @@ pub enum KoiosError {
     BadField(&'static str),
     #[error("response body decode failed: {0}")]
     Decode(String),
+    #[error("`{0}` is not safe to place in a query string")]
+    UnsafeQueryValue(&'static str),
+    #[error("too many rows from Koios for `{0}`")]
+    TooManyRows(&'static str),
+    #[error("genesis value `{0}` from Koios is not mainnet's")]
+    NotMainnetGenesis(&'static str),
+    #[error("protocol parameter `{name}` = {value} is outside the range {min}..={max}")]
+    OutOfBand {
+        name: &'static str,
+        value: u64,
+        min: u64,
+        max: u64,
+    },
+}
+
+/// A value interpolated into a Koios query string must be plain ASCII
+/// letters and digits (which is all a bech32 id ever is), so it can never
+/// add or alter a query parameter.
+fn query_safe<'a>(value: &'a str, field: &'static str) -> Result<&'a str, KoiosError> {
+    if !value.is_empty() && value.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        Ok(value)
+    } else {
+        Err(KoiosError::UnsafeQueryValue(field))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -117,7 +141,7 @@ const MAX_ATTEMPTS: u32 = 4;
 /// Longest single pause between attempts. `Retry-After` comes from an
 /// unauthenticated upstream; without a cap a hostile or misconfigured
 /// Koios URL replying `429 Retry-After: 999999999` would park the handler
-/// future — and the operator's browser request — indefinitely.
+/// future, and the operator's browser request, indefinitely.
 const MAX_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(10);
 
 trait SendRetry {
@@ -210,7 +234,7 @@ pub async fn pool_info(
 }
 
 // ---------------------------------------------------------------------------
-// pool_updates — full history of registration/retirement certs for a pool.
+// pool_updates: full history of registration/retirement certs for a pool.
 // ---------------------------------------------------------------------------
 //
 // Used to detect pending pool parameter updates: rows whose
@@ -250,6 +274,7 @@ pub async fn pool_updates(
     // dropped rows could include the currently-active registration. Page
     // via `offset` until a short page marks the end; the explicit `order`
     // keeps pagination stable (the consumer's pick is order-independent).
+    let pool_id_bech32 = query_safe(pool_id_bech32, "pool_id")?;
     let mut all: Vec<PoolUpdate> = Vec::new();
     let mut offset: usize = 0;
     loop {
@@ -268,6 +293,9 @@ pub async fn pool_updates(
         if short_page {
             return Ok(all);
         }
+        if offset / PAGE_ROWS + 1 >= MAX_PAGES {
+            return Err(KoiosError::TooManyRows("pool_updates"));
+        }
         offset += PAGE_ROWS;
     }
 }
@@ -276,7 +304,7 @@ pub async fn pool_updates(
 // pool_stake_snapshot
 // ---------------------------------------------------------------------------
 
-/// One row from `pool_stake_snapshot`. Koios returns three rows per pool —
+/// One row from `pool_stake_snapshot`. Koios returns three rows per pool:
 /// one for each of the rolling Cardano stake snapshots (Mark, Set, Go).
 ///
 /// `epoch_no` reports the **target** epoch the snapshot is used for. The
@@ -291,7 +319,7 @@ pub async fn pool_updates(
 ///   Its nonce was finalised at the previous epoch's stability window
 ///   and is therefore always present once Set has rolled over.
 /// - `Go`: stake snapshot for the *previous epoch* (`epoch_no = current - 1`).
-///   Already past — useful only for historical analysis.
+///   Already past: useful only for historical analysis.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct StakeSnapshot {
     pub snapshot: String,
@@ -329,7 +357,7 @@ pub async fn pool_stake_snapshot(
 
 /// Convenience: pull the named snapshot and parse pool_stake /
 /// active_stake into integers. Returns the raw lovelace values plus the
-/// epoch number and nonce — sigma is left to the consumer so the full
+/// epoch number and nonce: sigma is left to the consumer so the full
 /// FixedDecimal precision is preserved through the wire format.
 pub fn extract_snapshot(
     snapshots: &[StakeSnapshot],
@@ -376,7 +404,7 @@ pub struct ExtractedSnapshot {
 // Shelley era anchors (immutable boundary constants)
 // ---------------------------------------------------------------------------
 //
-// The Shelley boundary slot/epoch/unix-timestamp can never change — they
+// The Shelley boundary slot/epoch/unix-timestamp can never change: they
 // were fixed when Shelley activated on 29 July 2020. Cardano protocol
 // parameters that *can* in principle change live in `GenesisParams`,
 // loaded from Koios.
@@ -393,6 +421,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn query_values_must_be_plain_letters_and_digits() {
+        assert_eq!(
+            query_safe(
+                "pool13vscgf9dwn0jt56u965wp99ychz6avktk3pyrye326f3xctz4nm",
+                "pool_id"
+            )
+            .unwrap(),
+            "pool13vscgf9dwn0jt56u965wp99ychz6avktk3pyrye326f3xctz4nm"
+        );
+        for bad in [
+            "",
+            "pool1x&limit=0",
+            "pool1x#",
+            "pool1 x",
+            "pool1x%26",
+            "pool1x/../y",
+            "pool1x=eq.1",
+        ] {
+            assert!(
+                matches!(
+                    query_safe(bad, "pool_id"),
+                    Err(KoiosError::UnsafeQueryValue("pool_id"))
+                ),
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
     fn pool_update_tolerates_null_owners_and_relays() {
         // Koios sends owners: null and relays: null on a pool deregistration
         // row in /pool_updates; serde(default) alone does not cover null.
@@ -405,7 +462,7 @@ mod tests {
     }
 
     /// Tests that need protocol parameters use the values that were live
-    /// on mainnet during development. They are NOT runtime defaults — at
+    /// on mainnet during development. They are NOT runtime defaults, at
     /// runtime they are always fetched from Koios.
     pub(super) fn test_params() -> GenesisParams {
         GenesisParams {
@@ -422,10 +479,7 @@ mod tests {
     fn epoch_first_slot_math() {
         let p = test_params();
         assert_eq!(p.epoch_first_slot(208), SHELLEY_FIRST_SLOT);
-        assert_eq!(
-            p.epoch_first_slot(209),
-            SHELLEY_FIRST_SLOT + p.epoch_length
-        );
+        assert_eq!(p.epoch_first_slot(209), SHELLEY_FIRST_SLOT + p.epoch_length);
         // Synthetic distant-epoch check
         assert_eq!(
             p.epoch_first_slot(628),
@@ -506,6 +560,101 @@ mod tests {
             Err(KoiosError::BadSnapshotField("nonce"))
         ));
     }
+    /// A stand-in Koios that answers every request with `body`.
+    async fn stub_koios(body: String) -> String {
+        let app = axum::Router::new().fallback(move || {
+            let body = body.clone();
+            async move {
+                (
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    body,
+                )
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn a_provider_that_never_stops_paging_is_cut_off() {
+        let row = r#"{"tx_hash":"aa","tx_index":0,"value":"1000000","asset_list":null}"#;
+        let page = format!("[{}]", vec![row; PAGE_ROWS].join(","));
+        let base = stub_koios(page).await;
+        let err = address_utxos(&reqwest::Client::new(), &base, "addr1test")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, KoiosError::TooManyRows(_)), "{err}");
+    }
+
+    #[tokio::test]
+    async fn an_oversized_response_is_refused() {
+        let base = stub_koios(" ".repeat(MAX_JSON_RESPONSE_BYTES + 1) + "[]").await;
+        let err = tip(&reqwest::Client::new(), &base).await.unwrap_err();
+        assert!(matches!(err, KoiosError::Decode(_)), "{err}");
+    }
+
+    #[test]
+    fn protocol_params_outside_the_guardrails_are_refused() {
+        let ok = ProtocolParams {
+            min_fee_a: 44,
+            min_fee_b: 155_381,
+            utxo_cost_per_byte: 4_310,
+        };
+        assert!(ok.check_band().is_ok());
+        for bad in [
+            ProtocolParams {
+                min_fee_a: 29,
+                ..ok.clone()
+            },
+            ProtocolParams {
+                min_fee_a: 1_001,
+                ..ok.clone()
+            },
+            ProtocolParams {
+                min_fee_b: 99_999,
+                ..ok.clone()
+            },
+            ProtocolParams {
+                utxo_cost_per_byte: 6_501,
+                ..ok.clone()
+            },
+        ] {
+            assert!(
+                matches!(bad.check_band(), Err(KoiosError::OutOfBand { .. })),
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_mainnet_genesis_values_are_accepted() {
+        assert!(test_params().check_mainnet().is_ok());
+        for bad in [
+            GenesisParams {
+                active_slots_coeff: 0.1,
+                ..test_params()
+            },
+            GenesisParams {
+                epoch_length: 86_400,
+                ..test_params()
+            },
+            GenesisParams {
+                slots_per_kes_period: 3_600,
+                ..test_params()
+            },
+            GenesisParams {
+                kes_max_evolutions: 120,
+                ..test_params()
+            },
+        ] {
+            assert!(
+                matches!(bad.check_mainnet(), Err(KoiosError::NotMainnetGenesis(_))),
+                "{bad:?}"
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -536,7 +685,10 @@ mod time_tests {
 
     #[test]
     fn shelley_first_slot_maps_to_genesis_timestamp() {
-        assert_eq!(slot_to_unix_time(SHELLEY_FIRST_SLOT), SHELLEY_FIRST_SLOT_UNIX);
+        assert_eq!(
+            slot_to_unix_time(SHELLEY_FIRST_SLOT),
+            SHELLEY_FIRST_SLOT_UNIX
+        );
     }
 
     #[test]
@@ -549,7 +701,7 @@ mod time_tests {
 }
 
 // ---------------------------------------------------------------------------
-// KES — chain tip, pool blocks, block info
+// KES: chain tip, pool blocks, block info
 // ---------------------------------------------------------------------------
 //
 // Rotating KES requires:
@@ -602,6 +754,7 @@ pub async fn pool_blocks(
     pool_id_bech32: &str,
     limit: usize,
 ) -> Result<Vec<PoolBlock>, KoiosError> {
+    let pool_id_bech32 = query_safe(pool_id_bech32, "pool_id")?;
     let url = format!(
         "{base_url}/pool_blocks?_pool_bech32={pool_id_bech32}&order=abs_slot.desc&limit={limit}"
     );
@@ -674,8 +827,8 @@ mod kes_tests {
 
 #[cfg(test)]
 mod opcert_validity_tests {
-    use super::*;
     use super::tests::test_params;
+    use super::*;
 
     #[test]
     fn end_period_is_start_plus_61() {
@@ -688,7 +841,10 @@ mod opcert_validity_tests {
     fn expires_at_slot_is_start_plus_62_periods() {
         let p = test_params();
         // Start period 1372 → first slot of period 1434 = 1434 * 129600
-        assert_eq!(p.opcert_expires_at_slot(1372), 1434 * p.slots_per_kes_period);
+        assert_eq!(
+            p.opcert_expires_at_slot(1372),
+            1434 * p.slots_per_kes_period
+        );
     }
 
     #[test]
@@ -696,7 +852,10 @@ mod opcert_validity_tests {
         let p = test_params();
         let start = 1372;
         let expiry_slot = p.opcert_expires_at_slot(start);
-        assert_eq!(p.opcert_expires_at_unix(start), slot_to_unix_time(expiry_slot));
+        assert_eq!(
+            p.opcert_expires_at_unix(start),
+            slot_to_unix_time(expiry_slot)
+        );
     }
 }
 // ---------------------------------------------------------------------------
@@ -711,7 +870,7 @@ mod opcert_validity_tests {
 
 #[derive(Debug, Clone, Copy)]
 pub struct GenesisParams {
-    /// Active slots coefficient (`f`) — fraction of slots in which a leader
+    /// Active slots coefficient (`f`): fraction of slots in which a leader
     /// is expected to be elected. Mainnet: 0.05.
     pub active_slots_coeff: f64,
     /// Slots per epoch. Mainnet: 432_000 (5 days at 1 slot/sec).
@@ -725,6 +884,28 @@ pub struct GenesisParams {
 }
 
 impl GenesisParams {
+    /// Refuse genesis values other than mainnet's. They are fixed by the
+    /// Shelley genesis and never change, and this tool builds for mainnet
+    /// only, so any other value is a provider fault. Left unchecked it would
+    /// skew the KES period, the opcert expiry, the epoch boundaries and the
+    /// leader schedule.
+    pub fn check_mainnet(&self) -> Result<(), KoiosError> {
+        if (self.active_slots_coeff - 0.05).abs() > 1e-12 {
+            return Err(KoiosError::NotMainnetGenesis("activeslotcoeff"));
+        }
+        let fixed: [(&'static str, u64, u64); 3] = [
+            ("epochlength", self.epoch_length, 432_000),
+            ("slotsperkesperiod", self.slots_per_kes_period, 129_600),
+            ("maxkesrevolutions", self.kes_max_evolutions, 62),
+        ];
+        for (name, value, mainnet) in fixed {
+            if value != mainnet {
+                return Err(KoiosError::NotMainnetGenesis(name));
+            }
+        }
+        Ok(())
+    }
+
     /// Compute the absolute first slot of the given mainnet epoch.
     pub fn epoch_first_slot(&self, epoch: u64) -> u64 {
         SHELLEY_FIRST_SLOT.saturating_add(
@@ -762,7 +943,7 @@ impl GenesisParams {
 
     /// Length of the randomness-stabilisation window in slots (4k/f).
     /// During the final stability_window slots of an epoch, no further
-    /// VRF outputs contribute to the next epoch's nonce — so the
+    /// VRF outputs contribute to the next epoch's nonce, so the
     /// next-epoch nonce is finalised once the chain enters this window.
     /// TPraos used 3k/f; since the Babbage/Praos era (post-Vasil) the
     /// window is 4k/f. On mainnet: 4 × 2160 / 0.05 = 172_800 slots
@@ -771,7 +952,7 @@ impl GenesisParams {
         ((4.0 * MAINNET_SECURITY_PARAM as f64) / self.active_slots_coeff).round() as u64
     }
 
-    /// Slot at which the stability window of `current_epoch` begins —
+    /// Slot at which the stability window of `current_epoch` begins:
     /// equivalently, the slot at which the nonce for `current_epoch + 1`
     /// becomes final.
     pub fn next_nonce_finalised_slot(&self, current_epoch: u64) -> u64 {
@@ -780,7 +961,7 @@ impl GenesisParams {
     }
 
     /// True when `current_slot` is at or beyond the start of the current
-    /// epoch's stability window — i.e. a leaderlog for the next epoch
+    /// epoch's stability window, i.e. a leaderlog for the next epoch
     /// can be safely computed.
     pub fn next_epoch_leaderlog_ready(&self, current_slot: u64, current_epoch: u64) -> bool {
         current_slot >= self.next_nonce_finalised_slot(current_epoch)
@@ -803,7 +984,10 @@ struct GenesisRow {
 
 /// Fetch the four chain-tunable mainnet parameters of interest from
 /// Koios `/genesis`. Caller stores the result in the app state.
-pub async fn fetch_genesis_params(client: &reqwest::Client, base_url: &str) -> Result<GenesisParams, KoiosError> {
+pub async fn fetch_genesis_params(
+    client: &reqwest::Client,
+    base_url: &str,
+) -> Result<GenesisParams, KoiosError> {
     let url = format!("{base_url}/genesis");
     let rows: Vec<GenesisRow> = client
         .get(&url)
@@ -816,7 +1000,7 @@ pub async fn fetch_genesis_params(client: &reqwest::Client, base_url: &str) -> R
         .into_iter()
         .next()
         .ok_or(KoiosError::BadSnapshotField("genesis"))?;
-    Ok(GenesisParams {
+    let params = GenesisParams {
         active_slots_coeff: r
             .activeslotcoeff
             .parse()
@@ -833,11 +1017,13 @@ pub async fn fetch_genesis_params(client: &reqwest::Client, base_url: &str) -> R
             .maxkesrevolutions
             .parse()
             .map_err(|_| KoiosError::BadSnapshotField("maxkesrevolutions"))?,
-    })
+    };
+    params.check_mainnet()?;
+    Ok(params)
 }
 
 // ---------------------------------------------------------------------------
-// address_utxos — UTXOs at a given payment address. Used for tx-input
+// address_utxos: UTXOs at a given payment address. Used for tx-input
 // selection (e.g. funding a withdrawal tx fee).
 // ---------------------------------------------------------------------------
 
@@ -894,6 +1080,11 @@ struct AddressesRequest<'a> {
 /// Rows per page when paginating Koios array responses (its PostgREST cap).
 const PAGE_ROWS: usize = 1000;
 
+/// Most pages read from one paginated Koios query: 100,000 rows, far more
+/// than any real address or pool has. A provider that keeps returning full
+/// pages is cut off here instead of growing the process without limit.
+const MAX_PAGES: usize = 100;
+
 pub async fn address_utxos(
     client: &reqwest::Client,
     base_url: &str,
@@ -906,7 +1097,7 @@ pub async fn address_utxos(
         _extended: true,
     };
     // Koios caps array responses at 1000 rows, so a single request silently
-    // truncates the UTxO set of a busy address — and with it the spendable
+    // truncates the UTxO set of a busy address, and with it the spendable
     // total and the change output. Page via `offset` until a short page
     // marks the end; the explicit `order` keeps pagination stable
     // (PostgREST row order is unspecified otherwise, so pages could
@@ -930,6 +1121,9 @@ pub async fn address_utxos(
         if short_page {
             return Ok(all);
         }
+        if offset / PAGE_ROWS + 1 >= MAX_PAGES {
+            return Err(KoiosError::TooManyRows("address_utxos"));
+        }
         offset += PAGE_ROWS;
     }
 }
@@ -942,7 +1136,10 @@ mod address_utxos_tests {
     fn address_utxos_requests_extended() {
         // Koios returns asset_list only when _extended is true; guard against
         // a regression to false that would silently drop every native asset.
-        let body = AddressesRequest { _addresses: &["addr1"], _extended: true };
+        let body = AddressesRequest {
+            _addresses: &["addr1"],
+            _extended: true,
+        };
         let j = serde_json::to_string(&body).unwrap();
         assert!(j.contains("\"_extended\":true"), "{j}");
     }
@@ -959,12 +1156,15 @@ mod address_utxos_tests {
             ]
         }"#;
         let u: Utxo = serde_json::from_str(json).unwrap();
-        assert!(matches!(u.assets(), Err(KoiosError::BadField("asset quantity"))));
+        assert!(matches!(
+            u.assets(),
+            Err(KoiosError::BadField("asset quantity"))
+        ));
     }
 }
 
 // ---------------------------------------------------------------------------
-// account_info — stake-account state (delegation, rewards, withdrawals).
+// account_info: stake-account state (delegation, rewards, withdrawals).
 // Used for: how much can be withdrawn right now.
 // ---------------------------------------------------------------------------
 
@@ -1010,7 +1210,7 @@ pub async fn account_info(
 }
 
 // ---------------------------------------------------------------------------
-// proposal_list — open governance actions, for the SPO vote picker.
+// proposal_list: open governance actions, for the SPO vote picker.
 // ---------------------------------------------------------------------------
 //
 // Koios returns every proposal ever submitted; the query filters to those
@@ -1070,12 +1270,15 @@ pub async fn proposal_list(
         if short_page {
             return Ok(all);
         }
+        if offset / PAGE_ROWS + 1 >= MAX_PAGES {
+            return Err(KoiosError::TooManyRows("proposal_list"));
+        }
         offset += PAGE_ROWS;
     }
 }
 
 // ---------------------------------------------------------------------------
-// submittx — broadcast a signed transaction to the chain.
+// submittx: broadcast a signed transaction to the chain.
 // Koios accepts raw CBOR with content-type application/cbor and returns
 // the tx hash as a JSON string.
 // ---------------------------------------------------------------------------
@@ -1093,7 +1296,10 @@ pub enum SubmitError {
 /// is reached. Unlike `Response::bytes`, which buffers the entire body
 /// into memory before returning, this bounds how much a misbehaving or
 /// malicious upstream can force the process to allocate.
-pub(crate) async fn read_capped(mut resp: reqwest::Response, max: usize) -> Result<Vec<u8>, reqwest::Error> {
+pub(crate) async fn read_capped(
+    mut resp: reqwest::Response,
+    max: usize,
+) -> Result<Vec<u8>, reqwest::Error> {
     let mut buf = Vec::new();
     while let Some(chunk) = resp.chunk().await? {
         let remaining = max.saturating_sub(buf.len());
@@ -1125,17 +1331,76 @@ trait JsonCapped {
 }
 
 impl JsonCapped for reqwest::Response {
-    fn json_capped<T: serde::de::DeserializeOwned>(
-        self,
-    ) -> impl std::future::Future<Output = Result<T, KoiosError>> {
-        async move {
-            let bytes = read_capped(self, MAX_JSON_RESPONSE_BYTES).await?;
-            serde_json::from_slice(&bytes).map_err(|e| KoiosError::Decode(e.to_string()))
-        }
+    async fn json_capped<T: serde::de::DeserializeOwned>(self) -> Result<T, KoiosError> {
+        let bytes = read_capped(self, MAX_JSON_RESPONSE_BYTES).await?;
+        serde_json::from_slice(&bytes).map_err(|e| KoiosError::Decode(e.to_string()))
     }
 }
 
-pub async fn submit_tx(client: &reqwest::Client, base_url: &str, tx_cbor: &[u8]) -> Result<String, SubmitError> {
+// ---------------------------------------------------------------------------
+// protocol parameters: fee coefficients and min-UTxO cost.
+// `/cli_protocol_params` returns a single cardano-cli-format object.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProtocolParams {
+    /// Fee per byte of transaction (`txFeePerByte`).
+    #[serde(rename = "txFeePerByte")]
+    pub min_fee_a: u64,
+    /// Flat fee constant (`txFeeFixed`).
+    #[serde(rename = "txFeeFixed")]
+    pub min_fee_b: u64,
+    /// Lovelace cost per byte of a UTxO (`utxoCostPerByte`), which drives min-ADA.
+    #[serde(rename = "utxoCostPerByte")]
+    pub utxo_cost_per_byte: u64,
+}
+
+impl ProtocolParams {
+    /// Refuse protocol parameters outside the range the Cardano constitution's
+    /// guardrails allow on mainnet. The provider is not trusted: these values
+    /// drive the fee and the min-ADA change, and a parameter the network could
+    /// never have adopted is a provider fault, so it is named as one here.
+    pub fn check_band(&self) -> Result<(), KoiosError> {
+        let band: [(&'static str, u64, u64, u64); 3] = [
+            ("txFeePerByte", self.min_fee_a, 30, 1_000),
+            ("txFeeFixed", self.min_fee_b, 100_000, 10_000_000),
+            ("utxoCostPerByte", self.utxo_cost_per_byte, 3_000, 6_500),
+        ];
+        for (name, value, min, max) in band {
+            if value < min || value > max {
+                return Err(KoiosError::OutOfBand {
+                    name,
+                    value,
+                    min,
+                    max,
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+pub async fn protocol_params(
+    client: &reqwest::Client,
+    base_url: &str,
+) -> Result<ProtocolParams, KoiosError> {
+    let url = format!("{base_url}/cli_protocol_params");
+    let params: ProtocolParams = client
+        .get(&url)
+        .send_retry()
+        .await?
+        .error_for_status()?
+        .json_capped()
+        .await?;
+    params.check_band()?;
+    Ok(params)
+}
+
+pub async fn submit_tx(
+    client: &reqwest::Client,
+    base_url: &str,
+    tx_cbor: &[u8],
+) -> Result<String, SubmitError> {
     /// Hard cap on bytes read from a Koios response. A Cardano tx_hash is
     /// 64 hex chars; without a cap, an HTML error page or a malicious
     /// upstream could stream unbounded data into process memory. The body
@@ -1159,12 +1424,14 @@ pub async fn submit_tx(client: &reqwest::Client, base_url: &str, tx_cbor: &[u8])
         });
     }
     // Koios returns the tx hash as a JSON string ("\"deadbeef…\"") or
-    // sometimes plain text — strip any surrounding quotes/whitespace.
+    // sometimes plain text: strip any surrounding quotes/whitespace.
     let cleaned = body.trim().trim_matches('"').to_string();
     if cleaned.len() != 64 || !cleaned.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(SubmitError::Rejected {
             status: 200,
-            body: format!("upstream returned 200 but body is not a 64-char hex tx hash: {cleaned:?}"),
+            body: format!(
+                "upstream returned 200 but body is not a 64-char hex tx hash: {cleaned:?}"
+            ),
         });
     }
     Ok(cleaned)

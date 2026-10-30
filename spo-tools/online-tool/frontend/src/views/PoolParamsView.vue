@@ -185,7 +185,7 @@ function onStartError(msg: string) {
   startError.value = msg
 }
 
-// Any form edit after a build was generated invalidates that build —
+// Any form edit after a build was generated invalidates that build:
 // scanning the stale QR would sign a tx that no longer matches what the
 // SPO sees in the form. Discard the stale request + QR + result so the
 // SPO must click Send to Signer again.
@@ -230,12 +230,12 @@ async function submitFragments(fragments: string[]) {
     const data = await r.json()
     // Correlate the result with the pending request: a leftover result for
     // an earlier (cancelled/rebuilt) request must not be shown as ready to
-    // submit — its witnesses sign a different tx body.
+    // submit: its witnesses sign a different tx body.
     if (bodyHashHex.value && data.body_hash_hex !== bodyHashHex.value) {
-      throw new Error('signed result does not match the pending request (tx body hash differs) — scan the result for the request shown above')
+      throw new Error('signed result does not match the pending request (tx body hash differs): scan the result for the request shown above')
     }
     result.value = data
-    notify.success(`Signed result received — ${data.witnesses.length} witnesses`)
+    notify.success(`Signed result received: ${data.witnesses.length} witnesses`)
     stopCycle()
     await nextTick()
     resultCardEl.value?.$el?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
@@ -274,7 +274,7 @@ async function submitToChain() {
       throw new Error(err.message)
     }
     submitted.value = await r.json()
-    notify.success(`Tx submitted — ${submitted.value!.tx_hash.slice(0, 16)}…`)
+    notify.success(`Tx submitted: ${submitted.value!.tx_hash.slice(0, 16)}…`)
   } catch (e: unknown) {
     submitError.value = e instanceof Error ? e.message : String(e)
   } finally {

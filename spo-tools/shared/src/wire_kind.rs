@@ -26,7 +26,7 @@ impl WireKind {
     /// Snake-case wire string used in `pin_proof_hex`, equivalent to the
     /// serde-rendered form (pinned by `wire_str_matches_serde_form`).
     /// Signer-side PIN verification calls this; online-tool producers
-    /// must feed `pin_proof_hex` the same string — call
+    /// must feed `pin_proof_hex` the same string: call
     /// `request.kind.wire_str()` there rather than repeating the literal,
     /// or a renamed variant makes every request of that kind fail PIN
     /// verification on the signer.
@@ -99,10 +99,7 @@ mod tests {
             serde_json::to_string(&WireKind::PoolUpdate).unwrap(),
             "\"pool_update\""
         );
-        assert_eq!(
-            serde_json::to_string(&WireKind::Vote).unwrap(),
-            "\"vote\""
-        );
+        assert_eq!(serde_json::to_string(&WireKind::Vote).unwrap(), "\"vote\"");
         assert_eq!(
             serde_json::to_string(&WireKind::WitnessDoc).unwrap(),
             "\"witness_doc\""

@@ -5,10 +5,7 @@
 //! All errors flow through `SignExecuteError` which has a central
 //! `impl From<_> for ErrorEnvelope` mapping for the HTTP layer.
 
-use blake2::digest::{Update, VariableOutput};
-use blake2::Blake2bVar;
 use ed25519_dalek::{Signer, SigningKey};
-use pallas_crypto::key::ed25519::SecretKeyExtended;
 use kes_summed_ed25519::{kes::Sum6Kes, traits::KesSk};
 use shared::error::ErrorEnvelope;
 use tracing::debug;
@@ -16,46 +13,26 @@ use vrf_dalek::vrf03::{PublicKey03, SecretKey03, VrfProof03};
 use zeroize::Zeroizing;
 
 // ============================================================
-// Sign-execute helpers — pure compute / rotate cores, callable from the
+// Sign-execute helpers: pure compute / rotate cores, callable from the
 // web handler with paths sourced from signer config (instead of the env
 // vars the CLI uses).
 // ============================================================
 
-/// Signing-key material the core signers consume. Plain keys are
-/// standard 32-byte Ed25519 seeds; extended keys are BIP32-Ed25519
-/// (kL‖kR) from a converted mnemonic wallet, signed scalar-based.
-pub(crate) enum SigningKeyMaterial {
-    Plain(Zeroizing<[u8; 32]>),
-    Extended {
-        esk: Zeroizing<[u8; 64]>,
-        /// Public key embedded in the skey envelope; the loader verified
-        /// it equals the key derived from `esk`.
-        expected_pubkey: [u8; 32],
-    },
+pub(crate) use shared::signing::SigningKeyMaterial;
+
+impl From<shared::signing::MaterialError> for SignExecuteError {
+    fn from(e: shared::signing::MaterialError) -> Self {
+        SignExecuteError::WrongRole(e.to_string())
+    }
 }
 
 /// Validate an extended (BIP32-Ed25519) key and wrap it as signing
-/// material. Checks the Ed25519-BIP32 bit structure and that the embedded
-/// public key matches the one derived from the secret — an integrity
-/// cross-check that catches a corrupted or inconsistent extended skey
-/// before it is ever used to sign.
+/// material (`SigningKeyMaterial::extended` in airgap-core).
 fn extended_material(
     esk_64: [u8; 64],
     pubkey_32: [u8; 32],
 ) -> Result<SigningKeyMaterial, SignExecuteError> {
-    let sk = SecretKeyExtended::from_bytes(esk_64).map_err(|_| {
-        SignExecuteError::WrongRole("extended key failed Ed25519-BIP32 structure check".into())
-    })?;
-    let derived = sk.public_key();
-    if derived.as_ref() != pubkey_32.as_slice() {
-        return Err(SignExecuteError::WrongRole(
-            "extended key public-key mismatch (corrupt skey?)".into(),
-        ));
-    }
-    Ok(SigningKeyMaterial::Extended {
-        esk: Zeroizing::new(esk_64),
-        expected_pubkey: pubkey_32,
-    })
+    Ok(SigningKeyMaterial::extended(esk_64, pubkey_32)?)
 }
 
 impl From<SignExecuteError> for ErrorEnvelope {
@@ -80,7 +57,13 @@ impl From<SignExecuteError> for ErrorEnvelope {
                 tracing::warn!(detail = %msg, "rejecting request as invalid");
                 ErrorEnvelope::invalid("invalid request payload")
             }
-            SignExecuteError::WrongRole(_) => ErrorEnvelope::invalid("configured key has wrong role"),
+            SignExecuteError::KeyMismatch(_) => {
+                tracing::warn!(detail = %msg, "refusing a pool update that contradicts this signer's keys");
+                ErrorEnvelope::invalid(msg)
+            }
+            SignExecuteError::WrongRole(_) => {
+                ErrorEnvelope::invalid("configured key has wrong role")
+            }
             SignExecuteError::LoadVrf { source, .. }
             | SignExecuteError::LoadCold { source, .. }
             | SignExecuteError::LoadPayment { source, .. }
@@ -98,24 +81,36 @@ impl From<SignExecuteError> for ErrorEnvelope {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SignExecuteError {
-    #[error("VRF signing key path not configured — visit Setup")]
+    #[error("VRF signing key path not configured. Visit Setup")]
     VrfNotConfigured,
-    #[error("cold signing key path not configured — visit Setup")]
+    #[error("cold signing key path not configured. Visit Setup")]
     ColdNotConfigured,
-    #[error("payment signing key path not configured — visit Setup")]
+    #[error("payment signing key path not configured. Visit Setup")]
     PaymentNotConfigured,
-    #[error("reward stake signing key path not configured — visit Setup")]
+    #[error("reward stake signing key path not configured. Visit Setup")]
     RewardNotConfigured,
-    #[error("owner stake signing key path not configured — visit Setup")]
+    #[error("owner stake signing key path not configured. Visit Setup")]
     OwnerNotConfigured,
     #[error("could not load VRF key from {path}: {source}")]
-    LoadVrf { path: String, source: Box<dyn std::error::Error + Send + Sync> },
+    LoadVrf {
+        path: String,
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
     #[error("could not load cold key from {path}: {source}")]
-    LoadCold { path: String, source: Box<dyn std::error::Error + Send + Sync> },
+    LoadCold {
+        path: String,
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
     #[error("could not load payment key from {path}: {source}")]
-    LoadPayment { path: String, source: Box<dyn std::error::Error + Send + Sync> },
+    LoadPayment {
+        path: String,
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
     #[error("could not load stake key from {path}: {source}")]
-    LoadStake { path: String, source: Box<dyn std::error::Error + Send + Sync> },
+    LoadStake {
+        path: String,
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
     #[error("epoch_nonce_hex is invalid: {0}")]
     BadNonce(String),
     #[error("invalid leaderlog parameter: {0}")]
@@ -132,14 +127,26 @@ pub(crate) enum SignExecuteError {
     PoolMismatch(String),
     #[error("opcert counter check failed: {0}")]
     OpcertCounter(String),
+    /// A pool update that names a VRF key or owners this signer's own keys
+    /// contradict. Shown to the operator in full: the request is well formed
+    /// but would hurt the pool, and the message says what to check.
+    #[error("{0}")]
+    KeyMismatch(String),
     #[error("system entropy unavailable: {0}")]
     Entropy(String),
+}
+
+/// A key-load failure as the signing path carries and logs it: the same
+/// redacted description Setup shows, never the raw loader error (which can
+/// quote file content).
+fn redacted(e: &shared::cardano_keys::KeyLoadError) -> Box<dyn std::error::Error + Send + Sync> {
+    crate::validate::friendly_error(e).into()
 }
 
 pub(crate) fn load_vrf_from_path(path: &std::path::Path) -> Result<SecretKey03, SignExecuteError> {
     let key = shared::cardano_keys::load_skey(path).map_err(|e| SignExecuteError::LoadVrf {
         path: path.display().to_string(),
-        source: Box::new(e),
+        source: redacted(&e),
     })?;
     match key {
         shared::cardano_keys::CardanoKey::Vrf { .. } => {
@@ -158,10 +165,12 @@ pub(crate) fn load_vrf_from_path(path: &std::path::Path) -> Result<SecretKey03, 
     }
 }
 
-pub(crate) fn load_cold_seed_from_path(path: &std::path::Path) -> Result<Zeroizing<[u8; 32]>, SignExecuteError> {
+pub(crate) fn load_cold_seed_from_path(
+    path: &std::path::Path,
+) -> Result<Zeroizing<[u8; 32]>, SignExecuteError> {
     let key = shared::cardano_keys::load_skey(path).map_err(|e| SignExecuteError::LoadCold {
         path: path.display().to_string(),
-        source: Box::new(e),
+        source: redacted(&e),
     })?;
     match key {
         shared::cardano_keys::CardanoKey::PoolCold { seed_32 } => Ok(Zeroizing::new(seed_32)),
@@ -177,7 +186,7 @@ pub(crate) fn load_payment_material_from_path(
 ) -> Result<SigningKeyMaterial, SignExecuteError> {
     let key = shared::cardano_keys::load_skey(path).map_err(|e| SignExecuteError::LoadPayment {
         path: path.display().to_string(),
-        source: Box::new(e),
+        source: redacted(&e),
     })?;
     match key {
         shared::cardano_keys::CardanoKey::Payment { seed_32 } => {
@@ -198,7 +207,7 @@ pub(crate) fn load_stake_material_from_path(
 ) -> Result<SigningKeyMaterial, SignExecuteError> {
     let key = shared::cardano_keys::load_skey(path).map_err(|e| SignExecuteError::LoadStake {
         path: path.display().to_string(),
-        source: Box::new(e),
+        source: redacted(&e),
     })?;
     match key {
         shared::cardano_keys::CardanoKey::Stake { seed_32 } => {
@@ -223,41 +232,101 @@ fn build_vkey_witness(
     material: &SigningKeyMaterial,
     body_hash: &[u8; 32],
 ) -> Result<shared::witness::VkeyWitness, SignExecuteError> {
-    let (vkey_hex, signature_hex) = match material {
-        SigningKeyMaterial::Plain(seed) => {
-            let sk = SigningKey::from_bytes(seed);
-            let sig = sk.sign(body_hash);
-            (
-                hex::encode(sk.verifying_key().to_bytes()),
-                hex::encode(sig.to_bytes()),
-            )
-        }
-        SigningKeyMaterial::Extended { esk, expected_pubkey } => {
-            // BIP32-Ed25519: sign with the scalar directly (pallas
-            // SecretKeyExtended / cryptoxide), never as a 32-byte seed.
-            let sk = SecretKeyExtended::from_bytes(**esk).map_err(|_| {
-                SignExecuteError::WrongRole(
-                    "extended key failed Ed25519-BIP32 structure check".into(),
-                )
-            })?;
-            let derived = sk.public_key();
-            // Re-check the derived key against the envelope's embedded
-            // public key at signing time (also checked at load) so a
-            // compromised path cannot swap in a different extended key.
-            if derived.as_ref() != expected_pubkey.as_slice() {
-                return Err(SignExecuteError::WrongRole(
-                    "extended key public-key drift".into(),
-                ));
-            }
-            let sig = sk.sign(body_hash);
-            (hex::encode(derived.as_ref()), hex::encode(sig.as_ref()))
-        }
-    };
+    let (vkey, sig) = material.sign(body_hash)?;
+    let (vkey_hex, signature_hex) = (hex::encode(vkey), hex::encode(sig));
     Ok(shared::witness::VkeyWitness {
         role,
         vkey_hex,
         signature_hex,
     })
+}
+
+/// Decode the body CBOR hex and compute its blake2b-256 hash (what the
+/// witnesses sign over).
+fn body_hash_of(cbor_hex: &str) -> Result<(Vec<u8>, [u8; 32]), SignExecuteError> {
+    let body_bytes =
+        hex::decode(cbor_hex).map_err(|e| SignExecuteError::BadCborHex(e.to_string()))?;
+    let body_hash = shared::validate::blake2b256(&body_bytes);
+    Ok((body_bytes, body_hash))
+}
+
+// Body-to-request binding, per operation. These need no key: they decode
+// the body, hold every field against the request and return the body hash.
+// The preview runs them so that only a request whose body matches is ever
+// shown to the operator; signing runs them again before a key is used.
+
+pub(crate) fn check_withdrawal_body(
+    req: &shared::withdrawal::WithdrawalRequest,
+) -> Result<[u8; 32], SignExecuteError> {
+    let (body_bytes, body_hash) = body_hash_of(&req.tx_body_cbor_hex)?;
+    shared::tx_validator::validate_withdrawal_body(&body_bytes, req)
+        .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))?;
+    Ok(body_hash)
+}
+
+pub(crate) fn check_drep_delegation_body(
+    req: &shared::drep::DRepDelegationRequest,
+) -> Result<[u8; 32], SignExecuteError> {
+    let (body_bytes, body_hash) = body_hash_of(&req.tx_body_cbor_hex)?;
+    shared::tx_validator::validate_drep_body(&body_bytes, req)
+        .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))?;
+    Ok(body_hash)
+}
+
+pub(crate) fn check_pool_update_body(
+    req: &shared::pool_update::PoolUpdateRequest,
+) -> Result<[u8; 32], SignExecuteError> {
+    let (body_bytes, body_hash) = body_hash_of(&req.tx_body_cbor_hex)?;
+    shared::tx_validator::validate_pool_update_body(&body_bytes, req)
+        .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))?;
+    Ok(body_hash)
+}
+
+pub(crate) fn check_vote_body(
+    req: &shared::vote::VoteRequest,
+) -> Result<[u8; 32], SignExecuteError> {
+    let (body_bytes, body_hash) = body_hash_of(&req.tx_body_cbor_hex)?;
+    shared::tx_validator::validate_vote_body(&body_bytes, req)
+        .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))?;
+    Ok(body_hash)
+}
+
+/// The rationale-witness counterpart: the payload must be a CIP-100
+/// canonical body (never a transaction body). Returns the hash the witness
+/// signs.
+pub(crate) fn check_witness_body(
+    req: &shared::witness_doc::SpoWitnessRequest,
+) -> Result<[u8; 32], SignExecuteError> {
+    shared::validate::assert_canonical_body_nquads(req.canonical_body.as_bytes())
+        .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))?;
+    Ok(shared::validate::blake2b256(req.canonical_body.as_bytes()))
+}
+
+/// Confirm the request's payment address is controlled by the payment key
+/// this signer holds. Every body validator sends the change to the
+/// request's payment address, and the request is written by the online
+/// tool: without this check a compromised online tool could name an address
+/// of its own, spend the operator's real UTxOs and collect the change
+/// there. Only the payment credential is bound, so a separate fee address
+/// with its own key, with or without a stake part, works as before.
+fn assert_payment_address_is_own(
+    payment_material: &SigningKeyMaterial,
+    payment_address_bech32: &str,
+) -> Result<(), SignExecuteError> {
+    let payment_vkey = payment_material.verifying_key()?;
+    shared::validate::assert_payment_key_controls_address(&payment_vkey, payment_address_bech32)
+        .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))
+}
+
+/// Confirm a stake address named in the request belongs to the stake key
+/// that signs for it (see `assert_stake_vkey_matches_address`).
+fn assert_stake_address_is_own(
+    stake_material: &SigningKeyMaterial,
+    stake_address_bech32: &str,
+) -> Result<(), SignExecuteError> {
+    let stake_vkey = stake_material.verifying_key()?;
+    shared::tx_validator::assert_stake_vkey_matches_address(stake_address_bech32, &stake_vkey)
+        .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))
 }
 
 /// Sign the body hash of a withdrawal tx with the supplied seeds, producing
@@ -267,23 +336,22 @@ pub(crate) fn sign_withdrawal_core(
     payment_material: SigningKeyMaterial,
     reward_material: SigningKeyMaterial,
 ) -> Result<shared::withdrawal::WithdrawalResult, SignExecuteError> {
-    let body_bytes = hex::decode(&req.tx_body_cbor_hex)
-        .map_err(|e| SignExecuteError::BadCborHex(e.to_string()))?;
-    shared::tx_validator::validate_withdrawal_body(&body_bytes, req)
-        .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))?;
-
-    let mut hasher = Blake2bVar::new(32).expect("blake2b 256 init");
-    hasher.update(&body_bytes);
-    let mut body_hash = [0u8; 32];
-    hasher
-        .finalize_variable(&mut body_hash)
-        .expect("blake2b 256 fin");
+    assert_payment_address_is_own(&payment_material, &req.payment_address_bech32)?;
+    assert_stake_address_is_own(&reward_material, &req.pool_reward_address_bech32)?;
+    let body_hash = check_withdrawal_body(req)?;
 
     let witnesses = vec![
-        build_vkey_witness(shared::witness::WitnessRole::Payment, &payment_material, &body_hash)?,
-        build_vkey_witness(shared::witness::WitnessRole::RewardStake, &reward_material, &body_hash)?,
+        build_vkey_witness(
+            shared::witness::WitnessRole::Payment,
+            &payment_material,
+            &body_hash,
+        )?,
+        build_vkey_witness(
+            shared::witness::WitnessRole::RewardStake,
+            &reward_material,
+            &body_hash,
+        )?,
     ];
-
     Ok(shared::withdrawal::WithdrawalResult {
         body_hash_hex: hex::encode(body_hash),
         witnesses,
@@ -296,23 +364,22 @@ pub(crate) fn sign_drep_delegation_core(
     payment_material: SigningKeyMaterial,
     owner_material: SigningKeyMaterial,
 ) -> Result<shared::drep::DRepDelegationResult, SignExecuteError> {
-    let body_bytes = hex::decode(&req.tx_body_cbor_hex)
-        .map_err(|e| SignExecuteError::BadCborHex(e.to_string()))?;
-    shared::tx_validator::validate_drep_body(&body_bytes, req)
-        .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))?;
-
-    let mut hasher = Blake2bVar::new(32).expect("blake2b 256 init");
-    hasher.update(&body_bytes);
-    let mut body_hash = [0u8; 32];
-    hasher
-        .finalize_variable(&mut body_hash)
-        .expect("blake2b 256 fin");
+    assert_payment_address_is_own(&payment_material, &req.payment_address_bech32)?;
+    assert_stake_address_is_own(&owner_material, &req.stake_credential_bech32)?;
+    let body_hash = check_drep_delegation_body(req)?;
 
     let witnesses = vec![
-        build_vkey_witness(shared::witness::WitnessRole::Payment, &payment_material, &body_hash)?,
-        build_vkey_witness(shared::witness::WitnessRole::OwnerStake, &owner_material, &body_hash)?,
+        build_vkey_witness(
+            shared::witness::WitnessRole::Payment,
+            &payment_material,
+            &body_hash,
+        )?,
+        build_vkey_witness(
+            shared::witness::WitnessRole::OwnerStake,
+            &owner_material,
+            &body_hash,
+        )?,
     ];
-
     Ok(shared::drep::DRepDelegationResult {
         body_hash_hex: hex::encode(body_hash),
         witnesses,
@@ -326,36 +393,66 @@ pub(crate) fn sign_pool_update_core(
     cold_seed: Zeroizing<[u8; 32]>,
     owner_material: SigningKeyMaterial,
 ) -> Result<shared::pool_update::PoolUpdateResult, SignExecuteError> {
-    let body_bytes = hex::decode(&req.tx_body_cbor_hex)
-        .map_err(|e| SignExecuteError::BadCborHex(e.to_string()))?;
-    shared::tx_validator::validate_pool_update_body(&body_bytes, req)
-        .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))?;
+    assert_payment_address_is_own(&payment_material, &req.payment_address_bech32)?;
+    let body_hash = check_pool_update_body(req)?;
 
     // Bind the actual signing key to the pool id the body re-registers,
     // the same defense-in-depth as the vote path: the cold key must hash
     // to the request's pool id before it signs anything.
-    let cold_vkey = SigningKey::from_bytes(&cold_seed).verifying_key().to_bytes();
+    let cold_vkey = SigningKey::from_bytes(&cold_seed)
+        .verifying_key()
+        .to_bytes();
     shared::tx_validator::assert_cold_vkey_matches_pool(&req.pool_id_bech32, &cold_vkey)
         .map_err(|e| SignExecuteError::PoolMismatch(e.to_string()))?;
 
-    let mut hasher = Blake2bVar::new(32).expect("blake2b 256 init");
-    hasher.update(&body_bytes);
-    let mut body_hash = [0u8; 32];
-    hasher
-        .finalize_variable(&mut body_hash)
-        .expect("blake2b 256 fin");
+    // The owner key that signs must stay an owner, or the update would drop
+    // it from the pool and its pledge would stop counting.
+    let owner_vkey = owner_material.verifying_key()?;
+    shared::tx_validator::assert_owner_vkey_is_pool_owner(&req.pool_owner_stake_addresses, &owner_vkey)
+        .map_err(|_| {
+            SignExecuteError::KeyMismatch(
+                "the owner key on this signer is not one of the pool owners in this update. Signing it would drop your pledge from the pool. Do not sign. Check the owners on the online tool.".into(),
+            )
+        })?;
 
     let cold_material = SigningKeyMaterial::Plain(cold_seed);
     let witnesses = vec![
-        build_vkey_witness(shared::witness::WitnessRole::Payment, &payment_material, &body_hash)?,
-        build_vkey_witness(shared::witness::WitnessRole::Cold, &cold_material, &body_hash)?,
-        build_vkey_witness(shared::witness::WitnessRole::OwnerStake, &owner_material, &body_hash)?,
+        build_vkey_witness(
+            shared::witness::WitnessRole::Payment,
+            &payment_material,
+            &body_hash,
+        )?,
+        build_vkey_witness(
+            shared::witness::WitnessRole::Cold,
+            &cold_material,
+            &body_hash,
+        )?,
+        build_vkey_witness(
+            shared::witness::WitnessRole::OwnerStake,
+            &owner_material,
+            &body_hash,
+        )?,
     ];
-
     Ok(shared::pool_update::PoolUpdateResult {
         body_hash_hex: hex::encode(body_hash),
         witnesses,
     })
+}
+
+/// Refuse a pool update whose VRF key hash is not the hash (blake2b-256) of
+/// the VRF key configured on this signer. A wrong VRF key hash stops block
+/// production from the epoch the update takes effect.
+pub(crate) fn assert_vrf_matches(
+    vrf_keyhash_hex: &str,
+    vrf_skey: &SecretKey03,
+) -> Result<(), SignExecuteError> {
+    let own = shared::validate::blake2b256(PublicKey03::from(vrf_skey).as_bytes());
+    if hex::decode(vrf_keyhash_hex).ok().as_deref() != Some(own.as_slice()) {
+        return Err(SignExecuteError::KeyMismatch(
+            "the VRF key hash in this update is not the hash of the VRF key on this signer. Signing it would stop your pool from making blocks. Do not sign. Check the VRF key on the online tool.".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Sign an SPO governance-vote tx body with payment + cold skeys. The
@@ -367,29 +464,29 @@ pub(crate) fn sign_vote_core(
     payment_material: SigningKeyMaterial,
     cold_seed: Zeroizing<[u8; 32]>,
 ) -> Result<shared::vote::VoteResult, SignExecuteError> {
-    let body_bytes = hex::decode(&req.tx_body_cbor_hex)
-        .map_err(|e| SignExecuteError::BadCborHex(e.to_string()))?;
-    shared::tx_validator::validate_vote_body(&body_bytes, req)
-        .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))?;
+    assert_payment_address_is_own(&payment_material, &req.payment_address_bech32)?;
+    let body_hash = check_vote_body(req)?;
 
     // Bind the actual signing key to the pool id the body votes as.
-    let cold_vkey = SigningKey::from_bytes(&cold_seed).verifying_key().to_bytes();
+    let cold_vkey = SigningKey::from_bytes(&cold_seed)
+        .verifying_key()
+        .to_bytes();
     shared::tx_validator::assert_cold_vkey_matches_pool(&req.pool_id_bech32, &cold_vkey)
         .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))?;
 
-    let mut hasher = Blake2bVar::new(32).expect("blake2b 256 init");
-    hasher.update(&body_bytes);
-    let mut body_hash = [0u8; 32];
-    hasher
-        .finalize_variable(&mut body_hash)
-        .expect("blake2b 256 fin");
-
     let cold_material = SigningKeyMaterial::Plain(cold_seed);
     let witnesses = vec![
-        build_vkey_witness(shared::witness::WitnessRole::Payment, &payment_material, &body_hash)?,
-        build_vkey_witness(shared::witness::WitnessRole::Cold, &cold_material, &body_hash)?,
+        build_vkey_witness(
+            shared::witness::WitnessRole::Payment,
+            &payment_material,
+            &body_hash,
+        )?,
+        build_vkey_witness(
+            shared::witness::WitnessRole::Cold,
+            &cold_material,
+            &body_hash,
+        )?,
     ];
-
     Ok(shared::vote::VoteResult {
         body_hash_hex: hex::encode(body_hash),
         witnesses,
@@ -405,12 +502,12 @@ pub(crate) fn sign_witness_core(
     req: &shared::witness_doc::SpoWitnessRequest,
     cold_seed: Zeroizing<[u8; 32]>,
 ) -> Result<shared::witness_doc::SpoWitnessResult, SignExecuteError> {
-    shared::validate::assert_canonical_body_nquads(req.canonical_body.as_bytes())
-        .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))?;
-    let cold_vkey = SigningKey::from_bytes(&cold_seed).verifying_key().to_bytes();
+    let body_hash = check_witness_body(req)?;
+    let cold_vkey = SigningKey::from_bytes(&cold_seed)
+        .verifying_key()
+        .to_bytes();
     shared::tx_validator::assert_cold_vkey_matches_pool(&req.pool_id_bech32, &cold_vkey)
         .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))?;
-    let body_hash = shared::validate::blake2b256(req.canonical_body.as_bytes());
     let sig = SigningKey::from_bytes(&cold_seed).sign(&body_hash);
     Ok(shared::witness_doc::SpoWitnessResult {
         body_hash_hex: hex::encode(body_hash),
@@ -448,10 +545,9 @@ pub(crate) fn compute_leaderlog_core(
 
     let nonce_bytes =
         hex::decode(&req.epoch_nonce_hex).map_err(|e| SignExecuteError::BadNonce(e.to_string()))?;
-    let nonce: [u8; 32] = nonce_bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| SignExecuteError::BadNonce("epoch_nonce_hex must decode to 32 bytes".into()))?;
+    let nonce: [u8; 32] = nonce_bytes.as_slice().try_into().map_err(|_| {
+        SignExecuteError::BadNonce("epoch_nonce_hex must decode to 32 bytes".into())
+    })?;
 
     let pk = PublicKey03::from(vrf_skey);
     let mut leader_slots: Vec<u64> = Vec::new();
@@ -471,9 +567,9 @@ pub(crate) fn compute_leaderlog_core(
     let last = req
         .epoch_first_slot
         .checked_add(req.epoch_length)
-        .ok_or_else(|| SignExecuteError::BadParam(
-            "epoch_first_slot + epoch_length overflows u64".into(),
-        ))?;
+        .ok_or_else(|| {
+            SignExecuteError::BadParam("epoch_first_slot + epoch_length overflows u64".into())
+        })?;
     for slot in req.epoch_first_slot..last {
         let input = build_vrf_input(slot, &nonce);
         let proof = VrfProof03::generate(&pk, vrf_skey, &input);
@@ -505,13 +601,15 @@ fn read_existing_cold_counter(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(SignExecuteError::Encode(format!("read cold.counter: {e}"))),
     };
-    let v: serde_json::Value = serde_json::from_str(&raw)
-        .map_err(|e| SignExecuteError::OpcertCounter(format!("cold.counter is not valid JSON: {e}")))?;
-    let cbor_hex = v["cborHex"]
-        .as_str()
-        .ok_or_else(|| SignExecuteError::OpcertCounter("cold.counter envelope has no cborHex".into()))?;
-    let bytes = hex::decode(cbor_hex)
-        .map_err(|e| SignExecuteError::OpcertCounter(format!("cold.counter cborHex is not hex: {e}")))?;
+    let v: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
+        SignExecuteError::OpcertCounter(format!("cold.counter is not valid JSON: {e}"))
+    })?;
+    let cbor_hex = v["cborHex"].as_str().ok_or_else(|| {
+        SignExecuteError::OpcertCounter("cold.counter envelope has no cborHex".into())
+    })?;
+    let bytes = hex::decode(cbor_hex).map_err(|e| {
+        SignExecuteError::OpcertCounter(format!("cold.counter cborHex is not hex: {e}"))
+    })?;
     let mut dec = minicbor::Decoder::new(&bytes);
     if dec
         .array()
@@ -528,22 +626,22 @@ fn read_existing_cold_counter(
     let vkey_bytes = dec
         .bytes()
         .map_err(|e| SignExecuteError::OpcertCounter(format!("cold.counter cbor vkey: {e}")))?;
-    let vkey: [u8; 32] = vkey_bytes
-        .try_into()
-        .map_err(|_| SignExecuteError::OpcertCounter("cold.counter cold vkey is not 32 bytes".into()))?;
+    let vkey: [u8; 32] = vkey_bytes.try_into().map_err(|_| {
+        SignExecuteError::OpcertCounter("cold.counter cold vkey is not 32 bytes".into())
+    })?;
     Ok(Some((counter, vkey)))
 }
 
 /// Reject a KES rotation whose opcert issue counter regresses behind the
 /// last counter issued from this directory. `cold.counter` carries
-/// cardano-cli's issue-counter semantics — the number the NEXT opcert
-/// will use (last issued + 1) — so `stored - 1` is the last counter that
+/// cardano-cli's issue-counter semantics, the number the NEXT opcert
+/// will use (last issued + 1), so `stored - 1` is the last counter that
 /// actually went into a node.cert. The online tool computes `new_counter
 /// = on-chain counter + 1` and never consults this file, so the signer is
 /// the authority on what it last issued. Two values are accepted:
 ///
-/// * `new_counter >= stored` — a normal advance past the last issue;
-/// * `new_counter == stored - 1` — a reissue of the last-issued number.
+/// * `new_counter == stored`, the normal next issue;
+/// * `new_counter == stored - 1`: a reissue of the last-issued number.
 ///   Counter reuse is valid on-chain (the Praos OCERT rule accepts
 ///   `n == currentIssueNo`), and reissuing with a fresh KES key is the
 ///   recovery path when a rotation's outputs were lost before deployment:
@@ -553,7 +651,11 @@ fn read_existing_cold_counter(
 ///   exact `new_counter` being reissued, so the reissue is explicit.
 ///
 /// Anything lower regresses behind an opcert the chain may already have
-/// seen and is refused. With no prior `cold.counter` (first rotation)
+/// seen and is refused. Anything higher skips a number: Praos refuses an
+/// opcert whose counter is more than one past the last one the chain has
+/// seen (`n <= m + 1`), so the node's blocks would be rejected until the
+/// next rotation. A wrong suggestion from the online tool is the only way
+/// to get there, so it is refused too. With no prior `cold.counter` (first rotation)
 /// there is nothing to compare against and the online-tool value is
 /// accepted. A `cold.counter` written for a different cold key is
 /// rejected outright rather than ignored: it means the rotation is
@@ -569,13 +671,18 @@ fn assert_counter_monotonic(
     };
     if &stored_vkey != cold_vkey {
         return Err(SignExecuteError::OpcertCounter(
-            "cold.counter on disk was issued for a different cold key — refusing to rotate against an unrelated counter".into(),
+            "cold.counter on disk was issued for a different cold key: refusing to rotate against an unrelated counter".into(),
         ));
     }
     if new_counter.saturating_add(1) < next_counter {
         return Err(SignExecuteError::OpcertCounter(format!(
-            "new opcert counter {new_counter} regresses behind last issued counter {} — refusing to sign an opcert the chain may already have superseded",
+            "new opcert counter {new_counter} regresses behind last issued counter {}: refusing to sign an opcert the chain may already have superseded",
             next_counter - 1
+        )));
+    }
+    if new_counter > next_counter {
+        return Err(SignExecuteError::OpcertCounter(format!(
+            "new opcert counter {new_counter} is ahead of the next counter {next_counter} in cold.counter. The network refuses an opcert counter more than one past the last one it has seen. If opcerts were issued elsewhere, put that cold.counter in this directory."
         )));
     }
     if new_counter.saturating_add(1) == next_counter {
@@ -592,12 +699,12 @@ fn assert_counter_monotonic(
 /// Writes the three rotation outputs to `output_dir` as a staged bundle.
 /// kes.skey is 0600, node.cert + cold.counter are 0644.
 ///
-/// All three outputs are first written to `.tmp` siblings — named with a
+/// All three outputs are first written to `.tmp` siblings, named with a
 /// per-invocation nonce so two concurrent rotations can never truncate or
-/// rename each other's half-staged files — with the
+/// rename each other's half-staged files, with the
 /// final mode applied to the file descriptor (so kes.skey is 0600 from
 /// its first byte, never momentarily group/world-readable) and fsync'd
-/// individually — before any target path is touched. Only once every
+/// individually, before any target path is touched. Only once every
 /// output is durably staged are the three renames performed back-to-back,
 /// with no compute or I/O between them. rename(2) is atomic per file, so
 /// the sole window in which the bundle could be observed half-updated is
@@ -666,7 +773,7 @@ pub(crate) fn write_kes_outputs(
             staged.push((tmp_path, final_path));
         }
 
-        // Phase 2: every output is durably staged — rename them into place
+        // Phase 2: every output is durably staged, rename them into place
         // back-to-back with nothing in between.
         for (tmp_path, final_path) in &staged {
             std::fs::rename(tmp_path, final_path).map_err(|e| {
@@ -712,7 +819,7 @@ pub(crate) fn rotate_kes_core(
     // same check the vote path performs before signing. A cold.skey
     // pointed at the wrong pool (multi-pool operator, mis-copied USB)
     // would otherwise produce a "successful" bundle whose opcert belongs
-    // to a different pool — deploying it silently stops block production.
+    // to a different pool: deploying it silently stops block production.
     shared::tx_validator::assert_cold_vkey_matches_pool(&req.pool_id_bech32, &cold_vkey)
         .map_err(|e| SignExecuteError::PoolMismatch(e.to_string()))?;
 
@@ -727,13 +834,13 @@ pub(crate) fn rotate_kes_core(
     // absurd counter also fails before the keygen spends entropy.
     let next_counter = req.new_counter.checked_add(1).ok_or_else(|| {
         SignExecuteError::OpcertCounter(format!(
-            "new opcert counter {} has no successor — cannot store a next issue number",
+            "new opcert counter {} has no successor: cannot store a next issue number",
             req.new_counter
         ))
     })?;
 
     // Both `seed` (Sum6Kes seed) and `kes_skey_disk` (the 608-byte
-    // serialised KES signing key bytes) are sensitive — wrapped in
+    // serialised KES signing key bytes) are sensitive: wrapped in
     // Zeroizing so the buffer is wiped on drop. The Sum6Kes-internal
     // expansion buffer (`kes_buffer`) is also a Vec<u8> owned here and
     // zeroed explicitly before drop.
@@ -759,11 +866,21 @@ pub(crate) fn rotate_kes_core(
     let cold_sig: [u8; 64] = cold_sk.sign(&msg).to_bytes();
 
     let kes_skey_json = build_kes_skey_envelope(&kes_skey_disk);
-    let node_cert_json =
-        build_node_cert_envelope(&kes_vkey, req.new_counter, req.kes_period, &cold_sig, &cold_vkey);
+    let node_cert_json = build_node_cert_envelope(
+        &kes_vkey,
+        req.new_counter,
+        req.kes_period,
+        &cold_sig,
+        &cold_vkey,
+    );
     let cold_counter_json = build_cold_counter_envelope(next_counter, &cold_vkey);
 
-    write_kes_outputs(output_dir, &kes_skey_json, &node_cert_json, &cold_counter_json)?;
+    write_kes_outputs(
+        output_dir,
+        &kes_skey_json,
+        &node_cert_json,
+        &cold_counter_json,
+    )?;
 
     // Wipe the Sum6Kes expansion buffer before drop; Vec<u8> does not
     // implement ZeroizeOnDrop, so this is the explicit hook.
@@ -781,7 +898,6 @@ pub(crate) fn rotate_kes_core(
     })
 }
 
-
 // ============================================================
 // KES rotation (Sum6Kes keygen + opcert sign)
 // ============================================================
@@ -797,7 +913,7 @@ const KES_SKEY_DISK_SIZE: usize = 608;
 /// 4-byte period suffix to disk; that lives in memory only.
 ///
 /// The envelope and the intermediate hex both hold the complete hot
-/// signing key, so both live in `Zeroizing` — assembled with `format!`
+/// signing key, so both live in `Zeroizing`: assembled with `format!`
 /// instead of `serde_json::json!` so no unwiped `Value` copy of the key
 /// is left behind on the heap (same hygiene as the wallet keygen path).
 fn build_kes_skey_envelope(skey: &[u8; KES_SKEY_DISK_SIZE]) -> Zeroizing<String> {
@@ -837,8 +953,8 @@ fn build_node_cert_envelope(
 
 /// Build the cold.counter envelope. Inner CBOR is `82` array(2) =
 /// `[ uint next_counter , bytes(32) cold_vkey ]`. Both the CBOR value and
-/// the description carry cardano-cli's issue-counter semantics — the
-/// counter the NEXT opcert will use, i.e. last issued + 1 — so
+/// the description carry cardano-cli's issue-counter semantics (the
+/// counter the NEXT opcert will use, i.e. last issued + 1) so
 /// `cardano-cli node issue-op-cert` can consume the file directly without
 /// reissuing a duplicate number, and a counter file written by cardano-cli
 /// reads back into this tool without an off-by-one.
@@ -892,8 +1008,8 @@ mod tests {
         esk[31] &= 0b0011_1111;
         esk[31] |= 0b0100_0000;
         // Embedded pubkey does not match the derived one -> rejected.
-        // (SigningKeyMaterial intentionally has no Debug impl — it holds
-        // secret key bytes — so match on the Result directly.)
+        // (SigningKeyMaterial intentionally has no Debug impl, it holds
+        // secret key bytes, so match on the Result directly.)
         let result = extended_material(esk, [0u8; 32]);
         assert!(matches!(result, Err(SignExecuteError::WrongRole(_))));
     }
@@ -906,7 +1022,11 @@ mod tests {
         assert_eq!(v["type"], "KesSigningKey_ed25519_kes_2^6");
         assert_eq!(v["description"], "KES Signing Key");
         let cbor_hex = v["cborHex"].as_str().unwrap();
-        assert!(cbor_hex.starts_with("590260"), "prefix wrong: {}", &cbor_hex[..10]);
+        assert!(
+            cbor_hex.starts_with("590260"),
+            "prefix wrong: {}",
+            &cbor_hex[..10]
+        );
         // 3 prefix bytes + 608 payload bytes = 611 bytes = 1222 hex chars.
         assert_eq!(cbor_hex.len(), 1222);
     }
@@ -982,14 +1102,32 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vkey = [0x42u8; 32];
         // After issuing 7 the file holds next = 8 (cardano-cli semantics);
-        // the normal next rotation issues 8, and skipping ahead is fine too.
+        // the normal next rotation issues 8.
         std::fs::write(
             dir.path().join("cold.counter"),
             build_cold_counter_envelope(8, &vkey),
         )
         .unwrap();
         assert!(assert_counter_monotonic(dir.path(), 8, &vkey).is_ok());
-        assert!(assert_counter_monotonic(dir.path(), 9, &vkey).is_ok());
+    }
+
+    #[test]
+    fn counter_monotonic_rejects_skipping_ahead() {
+        let dir = tempfile::tempdir().unwrap();
+        let vkey = [0x42u8; 32];
+        // File holds next = 8. Issuing 9 or more skips a number, and Praos
+        // refuses an opcert counter more than one past the chain's last.
+        std::fs::write(
+            dir.path().join("cold.counter"),
+            build_cold_counter_envelope(8, &vkey),
+        )
+        .unwrap();
+        for ahead in [9, 10, u64::MAX] {
+            assert!(matches!(
+                assert_counter_monotonic(dir.path(), ahead, &vkey),
+                Err(SignExecuteError::OpcertCounter(_))
+            ));
+        }
     }
 
     #[test]
@@ -997,7 +1135,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vkey = [0x42u8; 32];
         // File holds next = 8 (last issued 7). A rotation whose outputs
-        // were lost before deployment reissues 7 with a fresh KES key —
+        // were lost before deployment reissues 7 with a fresh KES key:
         // the chain counter never advanced, so this must be allowed.
         std::fs::write(
             dir.path().join("cold.counter"),
@@ -1113,7 +1251,7 @@ mod tests {
 
     /// Deterministic cold seed with its precomputed pool id: bech32
     /// ("pool") of blake2b-224 over the Ed25519 verification key derived
-    /// from the seed — the same derivation `assert_cold_vkey_matches_pool`
+    /// from the seed: the same derivation `assert_cold_vkey_matches_pool`
     /// re-checks at rotation time.
     const TEST_COLD_SEED: [u8; 32] = [7u8; 32];
     const TEST_POOL_ID: &str = "pool13vscgf9dwn0jt56u965wp99ychz6avktk3pyrye326f3xctz4nm";
@@ -1162,7 +1300,7 @@ mod tests {
         // A rotation issuing 7 lands, but its outputs are lost before
         // deployment; the chain still shows 6, so the online tool suggests
         // 7 again. The reissue must succeed (fresh KES key, same issue
-        // number — valid per the on-chain OCERT rule), while regressing
+        // number: valid per the on-chain OCERT rule), while regressing
         // behind the last issue stays rejected.
         let dir = tempfile::tempdir().unwrap();
         rotate_kes_core(
@@ -1230,7 +1368,9 @@ mod tests {
         };
         let res = sign_witness_core(&req, Zeroizing::new(TEST_COLD_SEED)).expect("signs witness");
         assert_eq!(res.witness.witness_algorithm, "ed25519");
-        let cold_vkey = SigningKey::from_bytes(&TEST_COLD_SEED).verifying_key().to_bytes();
+        let cold_vkey = SigningKey::from_bytes(&TEST_COLD_SEED)
+            .verifying_key()
+            .to_bytes();
         assert_eq!(res.witness.public_key_hex, hex::encode(cold_vkey));
         let hash = shared::validate::blake2b256(body.as_bytes());
         let vk = VerifyingKey::from_bytes(
@@ -1238,7 +1378,8 @@ mod tests {
         )
         .unwrap();
         let sig = Signature::from_slice(&hex::decode(&res.witness.signature_hex).unwrap()).unwrap();
-        vk.verify(&hash, &sig).expect("witness verifies over body hash");
+        vk.verify(&hash, &sig)
+            .expect("witness verifies over body hash");
     }
 
     #[test]
@@ -1264,5 +1405,535 @@ mod tests {
             chain_context: witness_ctx(),
         };
         assert!(sign_witness_core(&req, Zeroizing::new([0xEEu8; 32])).is_err());
+    }
+
+    // --- transaction signing: body checks, fee ceiling, payment-key binding ---
+
+    mod tx {
+        use super::super::*;
+        use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+        use pallas_addresses::{
+            Address, Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart,
+            StakeAddress,
+        };
+        use pallas_codec::minicbor;
+        use pallas_codec::utils::{Bytes, NonEmptyKeyValuePairs, NonEmptySet, Nullable, Set};
+        use pallas_primitives::babbage::PseudoPostAlonzoTransactionOutput;
+        use pallas_primitives::conway::{
+            Certificate, DRep, GovActionId, PseudoTransactionOutput, TransactionBody,
+            TransactionOutput, Value, Vote, Voter, VotingProcedure, Withdrawals,
+        };
+        use pallas_primitives::{Hash, NetworkId, StakeCredential, TransactionInput};
+        use shared::chain_context::ChainContext;
+        use shared::utxo::UtxoInput;
+        use shared::wire_kind::WireKind;
+
+        /// The operator's payment key: it controls a fee address of its own,
+        /// separate from the pledge / owner / reward stake keys.
+        const PAYMENT_SEED: [u8; 32] = [9u8; 32];
+        const OWNER_SEED: [u8; 32] = [0x44u8; 32];
+        const REWARD_SEED: [u8; 32] = [0x55u8; 32];
+        const COLD_SEED: [u8; 32] = [7u8; 32];
+        const ATTACKER_SEED: [u8; 32] = [0x66u8; 32];
+        const FEE: u64 = 200_000;
+        const TTL: u64 = 2_000_000;
+        const CHANGE: u64 = 33_909_103;
+
+        fn vk(seed: &[u8; 32]) -> [u8; 32] {
+            SigningKey::from_bytes(seed).verifying_key().to_bytes()
+        }
+        fn kh(seed: &[u8; 32]) -> Hash<28> {
+            Hash::from(shared::validate::blake2b224(&vk(seed)))
+        }
+        fn plain(seed: [u8; 32]) -> SigningKeyMaterial {
+            SigningKeyMaterial::Plain(Zeroizing::new(seed))
+        }
+        /// Mainnet address paying to the key of `payment_seed`: enterprise,
+        /// or a base address when a stake key seed is given.
+        fn address_of(payment_seed: &[u8; 32], stake_seed: Option<&[u8; 32]>) -> String {
+            let delegation = match stake_seed {
+                Some(s) => ShelleyDelegationPart::key_hash(kh(s)),
+                None => ShelleyDelegationPart::Null,
+            };
+            ShelleyAddress::new(
+                Network::Mainnet,
+                ShelleyPaymentPart::key_hash(kh(payment_seed)),
+                delegation,
+            )
+            .to_bech32()
+            .unwrap()
+        }
+        fn stake_address_of(seed: &[u8; 32]) -> String {
+            let sh = ShelleyAddress::new(
+                Network::Mainnet,
+                ShelleyPaymentPart::key_hash(kh(seed)),
+                ShelleyDelegationPart::key_hash(kh(seed)),
+            );
+            let st: StakeAddress = sh.try_into().unwrap();
+            st.to_bech32().unwrap()
+        }
+        fn pool_id_of(cold_seed: &[u8; 32]) -> String {
+            let hash = shared::validate::blake2b224(&vk(cold_seed));
+            bech32::encode::<bech32::Bech32>(bech32::Hrp::parse("pool").unwrap(), &hash).unwrap()
+        }
+        fn own() -> String {
+            address_of(&PAYMENT_SEED, None)
+        }
+        fn raw(addr: &str) -> Vec<u8> {
+            Address::from_bech32(addr).unwrap().to_vec()
+        }
+        fn out(addr: &str, coin: u64) -> TransactionOutput {
+            PseudoTransactionOutput::PostAlonzo(PseudoPostAlonzoTransactionOutput {
+                address: Bytes::from(raw(addr)),
+                value: Value::Coin(coin),
+                datum_option: None,
+                script_ref: None,
+            })
+        }
+        fn ctx() -> ChainContext {
+            ChainContext {
+                current_epoch: 1,
+                current_slot: 100,
+                current_kes_period: 0,
+                epoch_ends_at_unix: 0,
+                opcert_expires_at_unix: None,
+                built_at_unix: 0,
+            }
+        }
+        fn one_input(payment: &str) -> Vec<UtxoInput> {
+            vec![UtxoInput {
+                tx_hash_hex: "00".repeat(32),
+                tx_index: 0,
+                amount_lovelace: CHANGE + FEE,
+                address_bech32: payment.into(),
+            }]
+        }
+        type Votes =
+            NonEmptyKeyValuePairs<Voter, NonEmptyKeyValuePairs<GovActionId, VotingProcedure>>;
+        fn body(
+            outputs: Vec<TransactionOutput>,
+            fee: u64,
+            certificates: Option<NonEmptySet<Certificate>>,
+            withdrawals: Option<Withdrawals>,
+            voting_procedures: Option<Votes>,
+        ) -> Vec<u8> {
+            let body = TransactionBody {
+                inputs: Set::from(vec![TransactionInput {
+                    transaction_id: Hash::from([0u8; 32]),
+                    index: 0,
+                }]),
+                outputs,
+                fee,
+                ttl: Some(TTL),
+                certificates,
+                withdrawals,
+                auxiliary_data_hash: None,
+                validity_interval_start: None,
+                mint: None,
+                script_data_hash: None,
+                collateral: None,
+                required_signers: None,
+                network_id: Some(NetworkId::Mainnet),
+                collateral_return: None,
+                total_collateral: None,
+                reference_inputs: None,
+                voting_procedures,
+                proposal_procedures: None,
+                treasury_value: None,
+                donation: None,
+            };
+            let mut buf = Vec::new();
+            minicbor::encode(&body, &mut buf).unwrap();
+            buf
+        }
+        fn verify(w: &shared::witness::VkeyWitness, hash_hex: &str, seed: &[u8; 32]) {
+            assert_eq!(
+                w.vkey_hex,
+                hex::encode(vk(seed)),
+                "witness is by the expected key"
+            );
+            let vkey = VerifyingKey::from_bytes(&vk(seed)).unwrap();
+            let sig = Signature::from_slice(&hex::decode(&w.signature_hex).unwrap()).unwrap();
+            vkey.verify(&hex::decode(hash_hex).unwrap(), &sig)
+                .expect("signature verifies over the body hash");
+        }
+
+        /// A withdrawal of 1000 ADA from the reward account of `REWARD_SEED`
+        /// to a receive address, with the change to `payment`.
+        fn withdrawal(payment: &str, fee: u64) -> shared::withdrawal::WithdrawalRequest {
+            withdrawal_from(payment, fee, &REWARD_SEED)
+        }
+
+        /// The same, from the reward account of `reward_seed`.
+        fn withdrawal_from(
+            payment: &str,
+            fee: u64,
+            reward_seed: &[u8; 32],
+        ) -> shared::withdrawal::WithdrawalRequest {
+            const NET: u64 = 1_000_000_000;
+            let receive = address_of(&[0x33u8; 32], Some(&[0x34u8; 32]));
+            let reward = stake_address_of(reward_seed);
+            let cbor = body(
+                vec![out(&receive, NET), out(payment, CHANGE)],
+                fee,
+                None,
+                Some(NonEmptyKeyValuePairs::Def(vec![(
+                    Bytes::from(raw(&reward)),
+                    NET,
+                )])),
+                None,
+            );
+            shared::withdrawal::WithdrawalRequest {
+                kind: WireKind::Withdrawal,
+                tx_body_cbor_hex: hex::encode(cbor),
+                fee_lovelace: fee,
+                net_to_reward_address_lovelace: NET,
+                change_to_payment_address_lovelace: CHANGE,
+                ttl_slot: TTL,
+                payment_address_bech32: payment.into(),
+                reward_receive_address_bech32: receive,
+                pool_reward_address_bech32: reward,
+                inputs: one_input(payment),
+                operator_pin_proof: "0".repeat(16),
+                chain_context: ctx(),
+            }
+        }
+
+        fn drep_delegation(payment: &str) -> shared::drep::DRepDelegationRequest {
+            drep_delegation_of(payment, &OWNER_SEED)
+        }
+
+        /// The same, delegating the stake key of `stake_seed`.
+        fn drep_delegation_of(
+            payment: &str,
+            stake_seed: &[u8; 32],
+        ) -> shared::drep::DRepDelegationRequest {
+            let cert =
+                Certificate::VoteDeleg(StakeCredential::AddrKeyhash(kh(stake_seed)), DRep::Abstain);
+            let cbor = body(
+                vec![out(payment, CHANGE)],
+                FEE,
+                Some(NonEmptySet::try_from(vec![cert]).unwrap()),
+                None,
+                None,
+            );
+            shared::drep::DRepDelegationRequest {
+                kind: WireKind::DrepDelegation,
+                tx_body_cbor_hex: hex::encode(cbor),
+                fee_lovelace: FEE,
+                change_to_payment_address_lovelace: CHANGE,
+                ttl_slot: TTL,
+                payment_address_bech32: payment.into(),
+                stake_credential_bech32: stake_address_of(stake_seed),
+                drep_choice: shared::drep::DRepChoice::Abstain,
+                inputs: one_input(payment),
+                operator_pin_proof: "0".repeat(16),
+                chain_context: ctx(),
+            }
+        }
+
+        fn vote(payment: &str) -> shared::vote::VoteRequest {
+            let action = GovActionId {
+                transaction_id: Hash::from([0xCDu8; 32]),
+                action_index: 0,
+            };
+            let procedure = VotingProcedure {
+                vote: Vote::Yes,
+                anchor: Nullable::Null,
+            };
+            let votes: Votes = NonEmptyKeyValuePairs::Def(vec![(
+                Voter::StakePoolKey(kh(&COLD_SEED)),
+                NonEmptyKeyValuePairs::Def(vec![(action, procedure)]),
+            )]);
+            let cbor = body(vec![out(payment, CHANGE)], FEE, None, None, Some(votes));
+            shared::vote::VoteRequest {
+                kind: WireKind::Vote,
+                tx_body_cbor_hex: hex::encode(cbor),
+                fee_lovelace: FEE,
+                change_to_payment_address_lovelace: CHANGE,
+                ttl_slot: TTL,
+                payment_address_bech32: payment.into(),
+                pool_id_bech32: pool_id_of(&COLD_SEED),
+                action_tx_hash_hex: "cd".repeat(32),
+                action_index: 0,
+                vote: shared::vote::VoteChoice::Yes,
+                anchor: None,
+                inputs: one_input(payment),
+                operator_pin_proof: "0".repeat(16),
+                chain_context: ctx(),
+            }
+        }
+
+        /// A pool-update request whose body is not a transaction at all.
+        /// Enough for the checks that run before the body is decoded.
+        fn pool_update_with_dummy_body(payment: &str) -> shared::pool_update::PoolUpdateRequest {
+            shared::pool_update::PoolUpdateRequest {
+                kind: WireKind::PoolUpdate,
+                tx_body_cbor_hex: "a0".into(),
+                fee_lovelace: FEE,
+                change_to_payment_address_lovelace: CHANGE,
+                ttl_slot: TTL,
+                payment_address_bech32: payment.into(),
+                pool_id_bech32: pool_id_of(&COLD_SEED),
+                vrf_keyhash_hex: "ab".repeat(32),
+                pledge_lovelace: 1_000_000_000,
+                fixed_cost_lovelace: 170_000_000,
+                margin_numerator: 1,
+                margin_denominator: 100,
+                reward_account_bech32: stake_address_of(&REWARD_SEED),
+                pool_owner_stake_addresses: vec![],
+                relays: vec![],
+                metadata_url: None,
+                metadata_hash_hex: None,
+                inputs: one_input(payment),
+                operator_pin_proof: "0".repeat(16),
+                chain_context: ctx(),
+            }
+        }
+
+        fn refused_for_payment_key(err: SignExecuteError) {
+            assert!(
+                matches!(&err, SignExecuteError::BodyValidation(m) if m.contains("payment key")),
+                "expected the payment-key refusal, got {err:?}"
+            );
+        }
+
+        #[test]
+        fn withdrawal_signs_with_a_separate_fee_address() {
+            // The fee address has its own key; the reward account belongs to
+            // another key; the rewards go to a third address. All unrelated,
+            // and it signs: only the payment address is bound to a key here.
+            let req = withdrawal(&own(), FEE);
+            let res =
+                sign_withdrawal_core(&req, plain(PAYMENT_SEED), plain(REWARD_SEED)).expect("signs");
+            assert_eq!(res.witnesses.len(), 2);
+            verify(&res.witnesses[0], &res.body_hash_hex, &PAYMENT_SEED);
+            verify(&res.witnesses[1], &res.body_hash_hex, &REWARD_SEED);
+        }
+
+        #[test]
+        fn withdrawal_refuses_change_to_an_address_the_payment_key_does_not_control() {
+            // A compromised online tool names its own address as the payment
+            // address: body and request agree and the change goes there.
+            let attacker = address_of(&ATTACKER_SEED, None);
+            let req = withdrawal(&attacker, FEE);
+            check_withdrawal_body(&req).expect("body and request agree");
+            refused_for_payment_key(
+                sign_withdrawal_core(&req, plain(PAYMENT_SEED), plain(REWARD_SEED)).unwrap_err(),
+            );
+        }
+
+        #[test]
+        fn drep_delegation_signs_with_a_base_payment_address() {
+            // The payment address may carry any stake part (here the owner's):
+            // only its payment credential is bound.
+            let payment = address_of(&PAYMENT_SEED, Some(&OWNER_SEED));
+            let req = drep_delegation(&payment);
+            let res = sign_drep_delegation_core(&req, plain(PAYMENT_SEED), plain(OWNER_SEED))
+                .expect("signs");
+            verify(&res.witnesses[0], &res.body_hash_hex, &PAYMENT_SEED);
+            verify(&res.witnesses[1], &res.body_hash_hex, &OWNER_SEED);
+        }
+
+        #[test]
+        fn drep_delegation_refuses_a_foreign_payment_address() {
+            let req = drep_delegation(&address_of(&ATTACKER_SEED, Some(&OWNER_SEED)));
+            check_drep_delegation_body(&req).expect("body and request agree");
+            refused_for_payment_key(
+                sign_drep_delegation_core(&req, plain(PAYMENT_SEED), plain(OWNER_SEED))
+                    .unwrap_err(),
+            );
+        }
+
+        fn refused_for_stake_key(err: SignExecuteError) {
+            assert!(
+                matches!(&err, SignExecuteError::BodyValidation(m) if m.contains("stake key")),
+                "expected the stake-key refusal, got {err:?}"
+            );
+        }
+
+        #[test]
+        fn withdrawal_refuses_a_reward_account_the_reward_key_does_not_control() {
+            // Body and request agree on a reward account of another key; the
+            // payment address is the operator's own. The network would reject
+            // this for lack of the other key's witness; the signer now
+            // refuses it itself.
+            let req = withdrawal_from(&own(), FEE, &ATTACKER_SEED);
+            check_withdrawal_body(&req).expect("body and request agree");
+            refused_for_stake_key(
+                sign_withdrawal_core(&req, plain(PAYMENT_SEED), plain(REWARD_SEED)).unwrap_err(),
+            );
+        }
+
+        #[test]
+        fn drep_delegation_refuses_a_stake_address_the_owner_key_does_not_control() {
+            let req = drep_delegation_of(&own(), &ATTACKER_SEED);
+            check_drep_delegation_body(&req).expect("body and request agree");
+            refused_for_stake_key(
+                sign_drep_delegation_core(&req, plain(PAYMENT_SEED), plain(OWNER_SEED))
+                    .unwrap_err(),
+            );
+        }
+
+        #[test]
+        fn vote_signs_and_refuses_a_foreign_payment_address() {
+            let req = vote(&own());
+            let res = sign_vote_core(&req, plain(PAYMENT_SEED), Zeroizing::new(COLD_SEED))
+                .expect("signs");
+            verify(&res.witnesses[0], &res.body_hash_hex, &PAYMENT_SEED);
+            verify(&res.witnesses[1], &res.body_hash_hex, &COLD_SEED);
+
+            let req = vote(&address_of(&ATTACKER_SEED, None));
+            check_vote_body(&req).expect("body and request agree");
+            refused_for_payment_key(
+                sign_vote_core(&req, plain(PAYMENT_SEED), Zeroizing::new(COLD_SEED)).unwrap_err(),
+            );
+        }
+
+        #[test]
+        fn pool_update_refuses_a_foreign_payment_address() {
+            // The payment-key check runs before the body is decoded, so the
+            // refusal does not depend on what the body contains.
+            let req = pool_update_with_dummy_body(&address_of(&ATTACKER_SEED, None));
+            refused_for_payment_key(
+                sign_pool_update_core(
+                    &req,
+                    plain(PAYMENT_SEED),
+                    Zeroizing::new(COLD_SEED),
+                    plain(OWNER_SEED),
+                )
+                .unwrap_err(),
+            );
+            // With the operator's own address it gets past that check and
+            // stops at the body, which here is not a transaction.
+            let req = pool_update_with_dummy_body(&own());
+            let err = sign_pool_update_core(
+                &req,
+                plain(PAYMENT_SEED),
+                Zeroizing::new(COLD_SEED),
+                plain(OWNER_SEED),
+            )
+            .unwrap_err();
+            assert!(
+                matches!(&err, SignExecuteError::BodyValidation(m) if !m.contains("payment key")),
+                "{err:?}"
+            );
+        }
+
+        #[test]
+        fn body_check_refuses_a_request_that_misdescribes_its_body() {
+            let mut req = withdrawal(&own(), FEE);
+            check_withdrawal_body(&req).expect("matches");
+            req.change_to_payment_address_lovelace += 1;
+            assert!(matches!(
+                check_withdrawal_body(&req),
+                Err(SignExecuteError::BodyValidation(_))
+            ));
+            req.tx_body_cbor_hex = "zz".into();
+            assert!(matches!(
+                check_withdrawal_body(&req),
+                Err(SignExecuteError::BadCborHex(_))
+            ));
+        }
+
+        #[test]
+        fn body_check_refuses_a_fee_above_the_ceiling() {
+            let fee = shared::validate::MAX_FEE_LOVELACE + 1;
+            let err = check_withdrawal_body(&withdrawal(&own(), fee)).unwrap_err();
+            assert!(
+                matches!(&err, SignExecuteError::BodyValidation(m) if m.contains("ceiling")),
+                "{err:?}"
+            );
+            check_withdrawal_body(&withdrawal(&own(), shared::validate::MAX_FEE_LOVELACE))
+                .expect("a fee at the ceiling is accepted");
+        }
+
+        #[test]
+        fn preview_is_refused_for_a_request_that_misdescribes_its_body() {
+            use crate::handlers::sign::{parse_and_check, ParsedRequest};
+            let mut req = vote(&own());
+            let ok = parse_and_check(&serde_json::to_vec(&req).unwrap()).expect("preview");
+            assert!(matches!(ok, ParsedRequest::Vote { .. }));
+            // The request now says No where the body votes Yes: no preview.
+            req.vote = shared::vote::VoteChoice::No;
+            let err = match parse_and_check(&serde_json::to_vec(&req).unwrap()) {
+                Err(e) => e,
+                Ok(_) => panic!("a request that misdescribes its body must not be previewed"),
+            };
+            assert!(err.message.contains("does not match"), "{}", err.message);
+            // Each transaction kind is checked, not only the vote.
+            let mut w = withdrawal(&own(), FEE);
+            w.net_to_reward_address_lovelace += 1;
+            assert!(parse_and_check(&serde_json::to_vec(&w).unwrap()).is_err());
+            let mut d = drep_delegation(&own());
+            d.drep_choice = shared::drep::DRepChoice::NoConfidence;
+            assert!(parse_and_check(&serde_json::to_vec(&d).unwrap()).is_err());
+            let p = pool_update_with_dummy_body(&own());
+            assert!(parse_and_check(&serde_json::to_vec(&p).unwrap()).is_err());
+        }
+
+        #[test]
+        fn witness_preview_carries_the_rationale_read_from_the_signed_bytes() {
+            use crate::handlers::sign::{parse_and_check, ParsedRequest};
+            let mut req = shared::witness_doc::SpoWitnessRequest {
+                kind: WireKind::WitnessDoc,
+                canonical_body: "_:c14n0 <https://example.com/#body> _:c14n1 .\n\
+                    _:c14n1 <https://example.com/#comment> \"I vote yes.\"@en-us .\n"
+                    .to_string(),
+                pool_id_bech32: pool_id_of(&COLD_SEED),
+                operator_pin_proof: "0".repeat(16),
+                chain_context: ctx(),
+            };
+            match parse_and_check(&serde_json::to_vec(&req).unwrap()).expect("preview") {
+                ParsedRequest::WitnessDoc { rationale, .. } => {
+                    assert_eq!(rationale.len(), 2);
+                    assert!(
+                        matches!(&rationale[1], shared::nquads::BodyLine::Text { field, value, .. }
+                        if field == "comment" && value == "I vote yes.")
+                    );
+                }
+                _ => panic!("expected a witness preview"),
+            }
+            req.canonical_body = "this is not n-quads .\n".to_string();
+            assert!(parse_and_check(&serde_json::to_vec(&req).unwrap()).is_err());
+        }
+
+        #[test]
+        fn key_load_failure_in_the_signing_path_is_redacted() {
+            use std::io::Write;
+            // A raw key without its CBOR header: the loader's own error quotes
+            // the first two bytes. Neither the error nor its source may.
+            let mut f = tempfile::NamedTempFile::new().unwrap();
+            write!(
+                f,
+                r#"{{"type":"PaymentSigningKeyShelley_ed25519","description":"","cborHex":"c0ffee11{}"}}"#,
+                "ab".repeat(28)
+            )
+            .unwrap();
+            let err = match load_payment_material_from_path(f.path()) {
+                Err(e) => e,
+                Ok(_) => panic!("a headerless key must not load"),
+            };
+            let SignExecuteError::LoadPayment { source, .. } = &err else {
+                panic!("expected LoadPayment, got {err:?}")
+            };
+            assert!(!source.to_string().contains("c0ff"), "{source}");
+            assert!(!err.to_string().contains("c0ff"), "{err}");
+        }
+    }
+
+    #[test]
+    fn the_vrf_key_hash_must_be_the_signers_own() {
+        let vrf = SecretKey03::from_bytes(&[0x07u8; 32]);
+        let own = hex::encode(shared::validate::blake2b256(
+            PublicKey03::from(&vrf).as_bytes(),
+        ));
+        assert!(assert_vrf_matches(&own, &vrf).is_ok());
+        for wrong in [hex::encode([0u8; 32]), "zz".repeat(32), String::new()] {
+            assert!(matches!(
+                assert_vrf_matches(&wrong, &vrf),
+                Err(SignExecuteError::KeyMismatch(_))
+            ));
+        }
     }
 }

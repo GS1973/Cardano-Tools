@@ -1,6 +1,6 @@
 [package]
 name = "signer"
-version = "1.1.0"
+version = "1.1.3"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -34,7 +34,9 @@ tower-http = { version = "0.6", features = ["set-header"] }
 
 # Frontend assets are embedded into the binary at compile time so the
 # signer is a single executable that can be copied onto the air-gapped VM.
-rust-embed = "8"
+# The embedded files carry fixed timestamps, so rebuilding the frontend
+# does not change the binary: a release can be reproduced from the source.
+rust-embed = { version = "8", features = ["deterministic-timestamps"] }
 mime_guess = "2"
 
 
@@ -46,8 +48,6 @@ mime_guess = "2"
 # Cargo dep-key `vrf_dalek` makes the Rust import `use vrf_dalek::...`.
 vrf_dalek = { package = "amaru-vrf-dalek", path = "../vendor/amaru-vrf-dalek" }
 
-# Blake2b-256 for the VRF input challenge (slot_be || epoch_nonce).
-blake2 = "0.10"
 hex    = "0.4"
 
 # KES (Key Evolving Signatures) for opcert generation. We use the same
@@ -76,6 +76,11 @@ zeroize = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
+# Inline transaction-body construction for the sign-core tests.
+pallas-primitives.workspace = true
+pallas-codec.workspace = true
+pallas-addresses.workspace = true
+bech32 = "0.11"
 reqwest = { workspace = true }
 axum = { workspace = true }
 serde_json = { workspace = true }

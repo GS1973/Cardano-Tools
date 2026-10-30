@@ -1,16 +1,21 @@
-use crate::{koios, state, util::{now_unix_ts, paired_keys_or_err}, AppState};
+use crate::{
+    koios, state,
+    util::{now_unix_ts, paired_keys_or_err},
+    AppState,
+};
+use axum::{extract::State, Json};
+use serde::{Deserialize, Serialize};
 use shared::error::ErrorEnvelope;
 use shared::{
     chain_context::ChainContext,
     kes::{KesRotationRequest, KesRotationResult},
-    wire_io::ur_decode_required};
-use axum::{extract::State, Json};
-use serde::{Deserialize, Serialize};
+    wire_io::ur_decode_required,
+};
 use std::sync::Arc;
 use tracing::error;
 
 /// Snapshot of everything the UI needs to display the current KES state and
-/// build a rotation request — current chain tip plus the latest block this
+/// build a rotation request: current chain tip plus the latest block this
 /// pool produced (which carries the on-chain op-cert counter).
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct KesStatus {
@@ -23,7 +28,7 @@ pub(crate) struct KesStatus {
     /// Highest op-cert counter the chain has seen for this pool, taken from
     /// the latest block they produced. 0 if the pool has never minted.
     on_chain_counter: u64,
-    /// `on_chain_counter + 1` — what the next rotation will pin to.
+    /// `on_chain_counter + 1`: what the next rotation will pin to.
     suggested_new_counter: u64,
     /// Hash of the latest block produced by this pool, if any. Lets the UI
     /// link back to a chain explorer for visual confirmation.
@@ -55,7 +60,8 @@ pub(crate) struct KesStatus {
     /// Seconds remaining until expiry. Negative if already expired.
     opcert_seconds_remaining: Option<i64>,
     /// Unix seconds the local state file was last updated.
-    state_last_updated_unix: Option<u64>}
+    state_last_updated_unix: Option<u64>,
+}
 
 pub(crate) async fn gather_kes_status(
     client: &reqwest::Client,
@@ -91,14 +97,13 @@ pub(crate) async fn gather_kes_status(
     // Signed countdown: positive = seconds until expiry, negative =
     // seconds since expiry. Computed via u64 saturating-sub then `try_from`
     // so the silent `as i64` cast on a future-far timestamp can't wrap.
-    let opcert_seconds_remaining: Option<i64> = opcert_expires_at_unix.map(|e| {
-        match e.checked_sub(now_unix) {
+    let opcert_seconds_remaining: Option<i64> =
+        opcert_expires_at_unix.map(|e| match e.checked_sub(now_unix) {
             Some(diff) => i64::try_from(diff).unwrap_or(i64::MAX),
             None => i64::try_from(now_unix.saturating_sub(e))
                 .map(|d| -d)
                 .unwrap_or(i64::MIN),
-        }
-    });
+        });
 
     Ok(KesStatus {
         pool_id_bech32: pool_id_bech32.into(),
@@ -124,7 +129,8 @@ pub(crate) async fn gather_kes_status(
         opcert_end_kes_period,
         opcert_expires_at_unix,
         opcert_seconds_remaining,
-        state_last_updated_unix: local_state.last_updated_unix})
+        state_last_updated_unix: local_state.last_updated_unix,
+    })
 }
 
 #[derive(Deserialize)]
@@ -137,7 +143,8 @@ pub(crate) struct KesSetStateRequestBody {
     opcert_start_kes_period: u64,
     /// Counter of that current opcert (matches the on-chain counter for
     /// blocks signed by it).
-    opcert_counter: u64}
+    opcert_counter: u64,
+}
 
 /// POST /api/kes/state
 ///
@@ -152,7 +159,8 @@ pub(crate) async fn kes_set_state(
     let new_state = state::KesState {
         opcert_start_kes_period: Some(body.opcert_start_kes_period),
         opcert_counter: Some(body.opcert_counter),
-        last_updated_unix: None};
+        last_updated_unix: None,
+    };
     state::save(&state::state_path(), new_state).map_err(|e| {
         error!(error = %e, "save kes state failed");
         ErrorEnvelope::internal("failed to persist state")
@@ -227,7 +235,8 @@ pub(crate) async fn kes_start(
         current_kes_period: status.current_kes_period,
         epoch_ends_at_unix: status.epoch_ends_at_unix,
         opcert_expires_at_unix: status.opcert_expires_at_unix,
-        built_at_unix: now_unix_ts()};
+        built_at_unix: now_unix_ts()?,
+    };
 
     let mut request = KesRotationRequest {
         kind: shared::wire_kind::WireKind::KesRotation,
@@ -235,11 +244,16 @@ pub(crate) async fn kes_start(
         new_counter: status.suggested_new_counter,
         kes_period: status.current_kes_period,
         operator_pin_proof: String::new(),
-        chain_context};
+        chain_context,
+    };
 
     let body_fp = shared::request_body_fp(&request);
-    request.operator_pin_proof =
-        shared::pin::pin_proof_hex(&body.pin, request.kind.wire_str(), request.chain_context.built_at_unix, &body_fp);
+    request.operator_pin_proof = shared::pin::pin_proof_hex(
+        &body.pin,
+        request.kind.wire_str(),
+        request.chain_context.built_at_unix,
+        &body_fp,
+    );
 
     let (_json_bytes, ur_fragments, request_fingerprint) =
         shared::wire_io::build_sign_request(&request, &own_sk, &peer_pk)?;
@@ -248,13 +262,15 @@ pub(crate) async fn kes_start(
         request,
         status,
         ur_fragments,
-        request_fingerprint}))
+        request_fingerprint,
+    }))
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct KesResultRequestBody {
-    ur_fragments: Vec<String>}
+    ur_fragments: Vec<String>,
+}
 
 #[derive(Serialize)]
 pub(crate) struct KesResultResponse {
@@ -280,17 +296,26 @@ pub(crate) async fn kes_result(
 ) -> Result<Json<KesResultResponse>, ErrorEnvelope> {
     shared::wire_io::require_non_empty(&body.ur_fragments, "ur_fragments")?;
     let (own_sk, peer_pk) = paired_keys_or_err(&app)?;
-    let payload = ur_decode_required(&body.ur_fragments, &peer_pk, &own_sk, shared::qr::Direction::Response)?;
+    let payload = ur_decode_required(
+        &body.ur_fragments,
+        &peer_pk,
+        &own_sk,
+        shared::qr::Direction::Response,
+    )?;
 
     let result: KesRotationResult = serde_json::from_slice(&payload).map_err(|e| {
         error!(error = %e, "JSON decode of kes result failed");
         ErrorEnvelope::invalid("invalid request payload")
     })?;
 
-    if let Err(e) = state::save(&state::state_path(), state::KesState {
-        opcert_start_kes_period: Some(result.kes_period),
-        opcert_counter: Some(result.counter),
-        last_updated_unix: None}) {
+    if let Err(e) = state::save(
+        &state::state_path(),
+        state::KesState {
+            opcert_start_kes_period: Some(result.kes_period),
+            opcert_counter: Some(result.counter),
+            last_updated_unix: None,
+        },
+    ) {
         error!(error = %e, "could not persist kes state after rotation");
     }
 
@@ -305,4 +330,3 @@ pub(crate) async fn kes_result(
         cold_counter_filename: result.cold_counter_filename,
     }))
 }
-

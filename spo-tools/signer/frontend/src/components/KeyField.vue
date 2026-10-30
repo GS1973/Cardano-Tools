@@ -86,7 +86,7 @@ const bulbClass = computed(() => {
 
 const bulbTitle = computed(() => {
   switch (props.status.status) {
-    case 'valid': return 'Valid — parsed and matches expected role'
+    case 'valid': return 'Valid: parsed and matches expected role'
     case 'wrong_role': return `Wrong role: this file is not a ${props.powers}`
     case 'error': return props.status.message || 'Validation failed'
     default: return 'Not yet validated'

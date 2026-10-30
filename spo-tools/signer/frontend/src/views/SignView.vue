@@ -32,7 +32,7 @@
             variant="outlined"
             density="compact"
             hide-details
-            placeholder="ur:spo-tools-action-v1/..."
+            placeholder="ur:spo-tools-action-v2/..."
           />
           <v-btn
             class="mt-2"
@@ -71,7 +71,7 @@
 
   <v-card v-if="parsed?.kind === 'leaderlog'" ref="previewCardEl" class="mb-4">
     <v-card-text>
-      <h3 class="text-subtitle-1 mt-0 mb-2">Preview — Compute leader schedule</h3>
+      <h3 class="text-subtitle-1 mt-0 mb-2">Preview: Compute leader schedule</h3>
       <p class="text-body-2 text-medium-emphasis mb-3">
         The signer will compute which slots this pool leads in epoch
         {{ parsed.request.epoch }} using the configured VRF signing key.
@@ -101,7 +101,7 @@
   <!-- Preview: KES rotation -->
   <v-card v-if="parsed?.kind === 'kes-rotation'" ref="previewCardEl" class="mb-4">
     <v-card-text>
-      <h3 class="text-subtitle-1 mt-0 mb-2">Preview — Rotate KES key</h3>
+      <h3 class="text-subtitle-1 mt-0 mb-2">Preview: Rotate KES key</h3>
       <p class="text-body-2 text-medium-emphasis mb-3">
         The signer will generate a fresh KES keypair and sign an operational
         certificate with the cold key. Output: kes.skey, node.cert, and
@@ -129,7 +129,7 @@
   <!-- Preview: Withdrawal -->
   <v-card v-if="parsed?.kind === 'withdrawal'" ref="previewCardEl" class="mb-4">
     <v-card-text>
-      <h3 class="text-subtitle-1 mt-0 mb-2">Preview — Sign reward withdrawal</h3>
+      <h3 class="text-subtitle-1 mt-0 mb-2">Preview: Sign reward withdrawal</h3>
       <p class="text-body-2 text-medium-emphasis mb-3">
         The signer will hash the supplied transaction body (Blake2b-256)
         and produce two vkey witnesses: one with the payment signing key,
@@ -162,8 +162,8 @@
             <div class="field-value">{{ fmtAda(parsed.request.fee_lovelace) }}</div>
           </div>
           <div class="field">
-            <div class="field-label">TTL slot</div>
-            <div class="field-value">{{ fmtInt(parsed.request.ttl_slot) }}</div>
+            <div class="field-label">Valid until (TTL slot)</div>
+            <div class="field-value">{{ fmtTtl(parsed.request.ttl_slot) }}</div>
           </div>
           <div class="field">
             <div class="field-label">Tx body size</div>
@@ -186,7 +186,7 @@
   <!-- Preview: DRep delegation -->
   <v-card v-if="parsed?.kind === 'drep-delegation'" ref="previewCardEl" class="mb-4">
     <v-card-text>
-      <h3 class="text-subtitle-1 mt-0 mb-2">Preview — Sign DRep delegation</h3>
+      <h3 class="text-subtitle-1 mt-0 mb-2">Preview: Sign DRep delegation</h3>
       <p class="text-body-2 text-medium-emphasis mb-3">
         The signer will hash the supplied transaction body (Blake2b-256)
         and produce two vkey witnesses: one with the payment signing key,
@@ -200,6 +200,13 @@
         <div class="field">
           <div class="field-label">Delegating to</div>
           <div class="field-value text-gold"><strong>{{ formatDrepChoice(parsed.request.drep_choice) }}</strong></div>
+        </div>
+        <div v-if="parsed.drep_id" class="field">
+          <div class="field-label">DRep id</div>
+          <div class="field-value">
+            <code class="text-caption">{{ parsed.drep_id }}</code>
+            <div v-if="'hash_hex' in parsed.request.drep_choice" class="text-caption text-medium-emphasis">hash {{ parsed.request.drep_choice.hash_hex }}</div>
+          </div>
         </div>
         <div class="field">
           <div class="field-label">Payment address</div>
@@ -216,8 +223,8 @@
             <div class="field-value">{{ fmtAda(parsed.request.fee_lovelace) }}</div>
           </div>
           <div class="field">
-            <div class="field-label">TTL slot</div>
-            <div class="field-value">{{ fmtInt(parsed.request.ttl_slot) }}</div>
+            <div class="field-label">Valid until (TTL slot)</div>
+            <div class="field-value">{{ fmtTtl(parsed.request.ttl_slot) }}</div>
           </div>
           <div class="field">
             <div class="field-label">Tx body size</div>
@@ -240,7 +247,7 @@
   <!-- Preview: SPO governance vote -->
   <v-card v-if="parsed?.kind === 'vote'" ref="previewCardEl" class="mb-4">
     <v-card-text>
-      <h3 class="text-subtitle-1 mt-0 mb-2">Preview — Sign SPO governance vote</h3>
+      <h3 class="text-subtitle-1 mt-0 mb-2">Preview: Sign SPO governance vote</h3>
       <p class="text-body-2 text-medium-emphasis mb-3">
         The signer will hash the supplied transaction body (Blake2b-256) and
         produce two vkey witnesses: payment (fee) and cold (the pool's voting
@@ -263,7 +270,10 @@
         <div class="field">
           <div class="field-label">Rationale anchor</div>
           <div class="field-value">
-            <code v-if="parsed.request.anchor" class="text-caption">{{ parsed.request.anchor.url }}</code>
+            <template v-if="parsed.request.anchor">
+              <code class="text-caption">{{ parsed.request.anchor.url }}</code>
+              <div class="text-caption text-medium-emphasis">hash {{ parsed.request.anchor.hash_hex }}</div>
+            </template>
             <span v-else class="text-caption text-medium-emphasis">(none)</span>
           </div>
         </div>
@@ -282,8 +292,8 @@
             <div class="field-value">{{ fmtAda(parsed.request.fee_lovelace) }}</div>
           </div>
           <div class="field">
-            <div class="field-label">TTL slot</div>
-            <div class="field-value">{{ fmtInt(parsed.request.ttl_slot) }}</div>
+            <div class="field-label">Valid until (TTL slot)</div>
+            <div class="field-value">{{ fmtTtl(parsed.request.ttl_slot) }}</div>
           </div>
           <div class="field">
             <div class="field-label">Tx body size</div>
@@ -306,7 +316,7 @@
   <!-- Preview: Pool param update -->
   <v-card v-if="parsed?.kind === 'pool-update'" ref="previewCardEl" class="mb-4">
     <v-card-text>
-      <h3 class="text-subtitle-1 mt-0 mb-2">Preview — Sign pool parameter update</h3>
+      <h3 class="text-subtitle-1 mt-0 mb-2">Preview: Sign pool parameter update</h3>
       <p class="text-body-2 text-medium-emphasis mb-3">
         The signer will hash the supplied transaction body (Blake2b-256) and produce
         three vkey witnesses: payment (fee), cold (operator authority), owner stake (pledge).
@@ -320,7 +330,8 @@
           <div class="field-label">VRF key hash</div>
           <div class="field-value">
             <code class="text-caption">{{ parsed.request.vrf_keyhash_hex }}</code>
-            <span class="text-caption text-medium-emphasis ml-2">must be your pool's current VRF key — unchanged unless you rotated it</span>
+            <span v-if="parsed.vrf_checked" class="text-caption text-medium-emphasis ml-2">checked against the VRF key on this signer before it signs</span>
+            <span v-else class="text-caption text-warning ml-2">not checked: no VRF key is set up on this signer. Compare it with your pool's VRF key.</span>
           </div>
         </div>
         <div class="field-row">
@@ -363,7 +374,7 @@
               variant="tonal"
               class="mt-2"
             >
-              Multi-owner pool: every listed owner stake address must visually match the pool's on-chain owners; verify each before signing.
+              Multi-owner pool: every listed owner stake address must visually match the pool's on-chain owners. Verify each before signing.
             </v-alert>
           </div>
         </div>
@@ -390,8 +401,8 @@
             <div class="field-value">{{ fmtAda(parsed.request.fee_lovelace) }}</div>
           </div>
           <div class="field">
-            <div class="field-label">TTL slot</div>
-            <div class="field-value">{{ fmtInt(parsed.request.ttl_slot) }}</div>
+            <div class="field-label">Valid until (TTL slot)</div>
+            <div class="field-value">{{ fmtTtl(parsed.request.ttl_slot) }}</div>
           </div>
           <div class="field">
             <div class="field-label">Tx body size</div>
@@ -416,11 +427,29 @@
     <v-card-text>
       <h3 class="text-subtitle-1 mt-0 mb-2">Preview: Witness rationale (CIP-100)</h3>
       <p class="text-body-2 text-medium-emphasis mb-3">
-        This produces a CIP-100 author witness over the canonical body below, NOT a transaction. The signer hashes the exact bytes shown (Blake2b-256) and signs with your pool cold key; the cold key must hash to the pool id below or the signer refuses.
+        This produces a CIP-100 author witness over the rationale below, NOT a transaction. The signer hashes the exact bytes of the canonical body (Blake2b-256) and signs with your pool cold key. The cold key must hash to the pool id below or the signer refuses.
       </p>
       <v-table density="compact" class="mb-3"><tbody>
         <tr><td class="text-medium-emphasis" style="width: 220px;">Witness as pool</td><td><code class="text-caption">{{ parsed.request.pool_id_bech32 }}</code></td></tr>
       </tbody></v-table>
+      <div class="text-caption text-medium-emphasis mb-1">What the rationale says</div>
+      <p class="text-caption text-medium-emphasis mb-2">
+        Read by this signer from the bytes it is about to sign, not taken from the online tool. Check that this is the rationale you wrote, word for word.
+      </p>
+      <v-alert v-if="rationaleUnreadable.length" type="warning" density="compact" variant="tonal" class="mb-2">
+        {{ rationaleUnreadable.length }} line(s) of the canonical body could not be read as a statement. They are part of what is signed and are shown as they are:
+        <div v-for="(l, i) in rationaleUnreadable" :key="i" class="raw-line mt-1">{{ l.raw }}</div>
+      </v-alert>
+      <div v-if="rationaleContent.length" class="rationale-read mb-2">
+        <div v-for="(l, i) in rationaleContent" :key="i" class="rationale-line">
+          <div class="rationale-field" :title="l.predicate">{{ l.field }}<span v-if="l.kind === 'link'"> (link)</span></div>
+          <div class="rationale-value">{{ l.value }}</div>
+        </div>
+      </div>
+      <div v-else class="text-medium-emphasis mb-2">The canonical body carries no text.</div>
+      <p v-if="rationaleNodeCount" class="text-caption text-medium-emphasis mb-3">
+        Plus {{ rationaleNodeCount }} statement(s) that only link the parts of the document together. They are in the canonical body below.
+      </p>
       <div class="text-caption text-medium-emphasis mb-1">Canonical body (exactly what is signed)</div>
       <pre style="max-height: 280px; overflow: auto; white-space: pre-wrap; word-break: break-all; font-family: monospace; font-size: 0.72rem; margin: 0 0 0.75rem 0; color: rgba(255,255,255,0.8);">{{ parsed.request.canonical_body }}</pre>
       <div class="d-flex justify-end mt-3" style="gap: 0.5rem;">
@@ -510,6 +539,12 @@
           to sign if it does not match the PIN already encoded in the
           encrypted payload.
         </p>
+        <p class="text-body-2 text-medium-emphasis mb-2">
+          The PIN only proves that you are present at this signer for this
+          request. It says nothing about what the request does: the online
+          tool knows the PIN too. Your protection is the preview you just
+          read.
+        </p>
         <v-text-field
           v-model="pinInput"
           density="compact"
@@ -541,7 +576,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import QRCode from 'qrcode'
 import NotConfiguredCard from '../components/NotConfiguredCard.vue'
 import NotPairedCard from '../components/NotPairedCard.vue'
@@ -549,7 +584,7 @@ import FundingInputs from '../components/FundingInputs.vue'
 import QRScanner from '@spo-tools/shared-frontend/components/QRScanner.vue'
 import { QR_CYCLE_INTERVAL_MS } from '@spo-tools/shared-frontend/constants/timings'
 import { useNotificationStore } from '@spo-tools/shared-frontend/stores/notification'
-import { fmtAda, fmtInt, fmtMargin, fmtRelays } from '@spo-tools/shared-frontend/utils/format'
+import { fmtAda, fmtInt, fmtMargin, fmtRelays, fmtTtl } from '@spo-tools/shared-frontend/utils/format'
 import { extractError } from '@spo-tools/shared-frontend/utils/error'
 import RequestFingerprintBadge from '@spo-tools/shared-frontend/components/RequestFingerprintBadge.vue'
 import type {
@@ -568,16 +603,25 @@ type ParsedRequest =
   | { kind: 'leaderlog'; request: LeaderlogRequest }
   | { kind: 'kes-rotation'; request: KesRotationRequest }
   | { kind: 'withdrawal'; request: WithdrawalRequest }
-  | { kind: 'drep-delegation'; request: DRepDelegationRequest }
-  | { kind: 'pool-update'; request: PoolUpdateRequest }
+  | { kind: 'drep-delegation'; request: DRepDelegationRequest; drep_id: string | null }
+  | { kind: 'pool-update'; request: PoolUpdateRequest; vrf_checked: boolean }
   | { kind: 'vote'; request: VoteRequest }
-  | { kind: 'witness-doc'; request: SpoWitnessRequest }
+  | { kind: 'witness-doc'; request: SpoWitnessRequest; rationale: BodyLine[] }
+
+/** One line of the canonical body as the signer read it back from the bytes
+ *  to be signed (airgap-core `nquads::BodyLine`). */
+type BodyLine =
+  | { kind: 'text'; subject: string; field: string; predicate: string; value: string; language: string | null; datatype: string | null }
+  | { kind: 'link'; subject: string; field: string; predicate: string; value: string }
+  | { kind: 'node'; subject: string; field: string; predicate: string; value: string }
+  | { kind: 'unreadable'; raw: string }
 
 function formatDrepChoice(c: DRepChoice): string {
   if (c.kind === 'abstain') return 'Abstain (always-abstain DRep)'
   if (c.kind === 'no_confidence') return 'No-confidence DRep'
-  if (c.kind === 'key_hash') return `Specific DRep (key) — ${c.hash_hex.slice(0, 16)}…`
-  if (c.kind === 'script_hash') return `Specific DRep (script) — ${c.hash_hex.slice(0, 16)}…`
+  if (c.kind === 'key_hash') return 'Specific DRep (key)'
+  if (c.kind === 'script_hash') return 'Specific DRep (script)'
+
   return 'unknown'
 }
 
@@ -590,20 +634,30 @@ function formatVote(v: VoteChoice): string {
 function leaderlogSigma(req: LeaderlogRequest): string {
   const pool = Number(req.pool_stake)
   const total = Number(req.total_active_stake)
-  if (!total || !Number.isFinite(pool) || !Number.isFinite(total)) return '—'
+  if (!total || !Number.isFinite(pool) || !Number.isFinite(total)) return 'n/a'
   return (pool / total).toExponential(4)
 }
 
 function activeSlotsCoeff(req: LeaderlogRequest): string {
   const numer = Number(req.active_slots_coeff_numer)
   const denom = Number(req.active_slots_coeff_denom)
-  if (!denom || !Number.isFinite(numer) || !Number.isFinite(denom)) return '—'
+  if (!denom || !Number.isFinite(numer) || !Number.isFinite(denom)) return 'n/a'
   return (numer / denom).toString()
 }
 
 const notify = useNotificationStore()
 
 const parsed = ref<ParsedRequest | null>(null)
+const rationaleLines = computed<BodyLine[]>(() =>
+  parsed.value?.kind === 'witness-doc' ? parsed.value.rationale ?? [] : [],
+)
+const rationaleContent = computed(() =>
+  rationaleLines.value.filter((l): l is Extract<BodyLine, { kind: 'text' | 'link' }> => l.kind === 'text' || l.kind === 'link'),
+)
+const rationaleUnreadable = computed(() =>
+  rationaleLines.value.filter((l): l is Extract<BodyLine, { kind: 'unreadable' }> => l.kind === 'unreadable'),
+)
+const rationaleNodeCount = computed(() => rationaleLines.value.filter((l) => l.kind === 'node').length)
 const requestFingerprint = ref<string | null>(null)
 const pinDialogOpen = ref(false)
 const pinInput = ref('')
@@ -742,7 +796,7 @@ async function executeWithPin() {
     const d = await r.json()
     result.value = d
     // Strict signed-flow UX: once a result is present, the request preview
-    // is no longer relevant — collapse it so the only visible card is
+    // is no longer relevant: collapse it so the only visible card is
     // the result with its Start-new-session action. Prevents the user
     // from accidentally clicking the parsed-card's Cancel and losing
     // the just-signed payload.
@@ -806,7 +860,7 @@ async function checkConfigured() {
     const d = await r.json()
     notConfigured.value = !d.saved
   } catch {
-    // Config endpoint unreachable — leave notConfigured at false rather
+    // Config endpoint unreachable: leave notConfigured at false rather
     // than blocking the UI on what is likely a transient fetch issue.
   }
 }
@@ -822,6 +876,11 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.raw-line { font-family: monospace; font-size: 0.72rem; word-break: break-all; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 4px; padding: 0.4rem 0.6rem; }
+.rationale-read { border: 1px solid rgba(var(--spo-gold-rgb, 255, 215, 0), 0.4); border-radius: 6px; padding: 0.6rem 0.8rem; background: rgba(255,255,255,0.03); }
+.rationale-line + .rationale-line { margin-top: 0.7rem; }
+.rationale-field { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; color: rgba(255, 255, 255, 0.55); }
+.rationale-value { font-size: 0.95rem; white-space: pre-wrap; word-break: break-word; color: #fff; }
 .field-stack {
   display: flex;
   flex-direction: column;

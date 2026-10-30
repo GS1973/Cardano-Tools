@@ -1,12 +1,12 @@
-//! Pool parameter update request/result types — wire format between
+//! Pool parameter update request/result types: wire format between
 //! online tool and signer.
 //!
 //! Single-owner v1.0. Three witness roles required: Payment (fee),
 //! Cold (operator authority), OwnerStake (pledge).
 
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 use serde_with::{serde_as, DisplayFromStr};
+use ts_rs::TS;
 
 use crate::chain_context::ChainContext;
 use crate::utxo::UtxoInput;
@@ -18,7 +18,7 @@ use crate::witness::VkeyWitness;
 /// internally-tagged deserializer silently ignores extra fields on unit
 /// variants (see `DRepChoice` in `drep.rs`). The parent request struct
 /// already denies unknown top-level fields. ts-rs cannot parse the
-/// attribute and prints a harmless "attribute ignored" build warning — it
+/// attribute and prints a harmless "attribute ignored" build warning: it
 /// has no TypeScript representation, so the generated bindings are
 /// unaffected.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
@@ -32,10 +32,7 @@ pub enum RelaySpec {
         ipv6: Option<String>,
     },
     /// DNS A record + optional port.
-    SingleHostName {
-        port: Option<u16>,
-        dns: String,
-    },
+    SingleHostName { port: Option<u16>, dns: String },
     /// DNS SRV record (no port).
     MultiHostName { dns: String },
 }
@@ -91,8 +88,8 @@ pub struct PoolUpdateRequest {
     /// Operator-PIN proof: 8 bytes (16 hex chars) of blake2b-256 over a
     /// domain-separated, length-prefixed preimage of the request kind,
     /// `chain_context.built_at_unix`, the request-body fingerprint
-    /// (computed with this field blanked) and the operator's 4-digit PIN
-    /// — see [`crate::pin`]. The operator types the PIN at QR-build time
+    /// (computed with this field blanked) and the operator's 4-digit PIN:
+    /// see [`crate::pin`]. The operator types the PIN at QR-build time
     /// on the online tool; the signer prompts for the same PIN after
     /// decrypt and refuses to sign on mismatch. Operator-presence gate at
     /// the moment of signing.
@@ -114,9 +111,10 @@ mod tests {
 
     #[test]
     fn relay_spec_accepts_known_variant() {
-        let v: RelaySpec =
-            serde_json::from_str(r#"{"kind":"single_host_name","port":3001,"dns":"relay.example"}"#)
-                .unwrap();
+        let v: RelaySpec = serde_json::from_str(
+            r#"{"kind":"single_host_name","port":3001,"dns":"relay.example"}"#,
+        )
+        .unwrap();
         assert!(matches!(v, RelaySpec::SingleHostName { .. }));
     }
 
@@ -130,4 +128,3 @@ mod tests {
         assert!(r.is_err(), "unknown field in variant should be rejected");
     }
 }
-

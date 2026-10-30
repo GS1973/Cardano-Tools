@@ -2,7 +2,7 @@
 //!
 //! The blockchain exposes the *counter* of a pool's current operational
 //! certificate (via Koios `block_info.op_cert_counter`), but it does not
-//! expose the cert's `start_kes_period` — the field that pins down exactly
+//! expose the cert's `start_kes_period`: the field that pins down exactly
 //! when the opcert expires (`start + maxKESEvolutions` = `start + 62`
 //! periods on Cardano mainnet).
 //!

@@ -86,7 +86,7 @@
         />
 
         <div class="text-caption text-medium-emphasis mb-1">
-          Base URL where you host rationale documents (e.g. https://yoursite/governance/). Optional; when set, the governance-vote view composes the anchor URL from this plus a file name.
+          Base URL where you host rationale documents, over https (e.g. https://yoursite/governance/). Optional. When set, the governance-vote view composes the anchor URL from this plus a file name.
         </div>
         <v-text-field
           v-model="cfg.manifest_base_url"
@@ -114,7 +114,7 @@
                 variant="outlined"
                 type="password"
                 class="mb-1"
-                :placeholder="isFocused.koios_api_key ? '' : (hasKoiosKey ? 'stored — leave blank to keep' : 'optional')"
+                :placeholder="isFocused.koios_api_key ? '' : (hasKoiosKey ? 'stored: leave blank to keep' : 'optional')"
                 @focus="isFocused.koios_api_key = true"
                 @blur="isFocused.koios_api_key = false"
               />
@@ -160,33 +160,33 @@
 
       <v-table v-if="resolved" density="compact">
         <tbody>
-          <tr><td class="text-medium-emphasis" style="width: 220px;">Ticker</td><td>{{ resolved.meta_json?.ticker || '—' }}</td></tr>
-          <tr><td class="text-medium-emphasis">Name</td><td>{{ resolved.meta_json?.name || '—' }}</td></tr>
-          <tr><td class="text-medium-emphasis">Status</td><td>{{ resolved.pool_status || '—' }}</td></tr>
+          <tr><td class="text-medium-emphasis" style="width: 220px;">Ticker</td><td>{{ resolved.meta_json?.ticker || 'n/a' }}</td></tr>
+          <tr><td class="text-medium-emphasis">Name</td><td>{{ resolved.meta_json?.name || 'n/a' }}</td></tr>
+          <tr><td class="text-medium-emphasis">Status</td><td>{{ resolved.pool_status || 'n/a' }}</td></tr>
           <tr><td class="text-medium-emphasis">Live stake</td><td>{{ fmtAda(resolved.live_stake, 2) }}</td></tr>
           <tr><td class="text-medium-emphasis">Active stake</td><td>{{ fmtAda(resolved.active_stake, 2) }}</td></tr>
           <tr><td class="text-medium-emphasis">Pledge</td><td>{{ fmtAda(resolved.pledge, 2) }}</td></tr>
-          <tr><td class="text-medium-emphasis">Margin</td><td>{{ resolved.margin != null ? `${(resolved.margin * 100).toFixed(2)} %` : '—' }}</td></tr>
+          <tr><td class="text-medium-emphasis">Margin</td><td>{{ resolved.margin != null ? `${(resolved.margin * 100).toFixed(2)} %` : 'n/a' }}</td></tr>
           <tr><td class="text-medium-emphasis">Fixed cost</td><td>{{ fmtAda(resolved.fixed_cost, 2) }}</td></tr>
-          <tr><td class="text-medium-emphasis">VRF key hash</td><td><code class="text-caption">{{ resolved.vrf_key_hash || '—' }}</code></td></tr>
-          <tr><td class="text-medium-emphasis">Reward account</td><td><code class="text-caption">{{ resolved.reward_addr || '—' }}</code></td></tr>
+          <tr><td class="text-medium-emphasis">VRF key hash</td><td><code class="text-caption">{{ resolved.vrf_key_hash || 'n/a' }}</code></td></tr>
+          <tr><td class="text-medium-emphasis">Reward account</td><td><code class="text-caption">{{ resolved.reward_addr || 'n/a' }}</code></td></tr>
           <tr>
             <td class="text-medium-emphasis">Owners</td>
             <td>
               <div v-for="o in (resolved.owners || [])" :key="o"><code class="text-caption">{{ o }}</code></div>
-              <span v-if="!(resolved.owners || []).length">—</span>
+              <span v-if="!(resolved.owners || []).length">none</span>
             </td>
           </tr>
           <tr>
             <td class="text-medium-emphasis">Relays</td>
             <td>
               <div v-for="(r, i) in (resolved.relays || [])" :key="i" class="text-caption">
-                {{ r.dns || r.ipv4 || r.ipv6 || '—' }}<span v-if="r.port">:{{ r.port }}</span>
+                {{ r.dns || r.ipv4 || r.ipv6 || 'n/a' }}<span v-if="r.port">:{{ r.port }}</span>
               </div>
-              <span v-if="!(resolved.relays || []).length">—</span>
+              <span v-if="!(resolved.relays || []).length">none</span>
             </td>
           </tr>
-          <tr><td class="text-medium-emphasis">Metadata URL</td><td><span class="text-caption">{{ resolved.meta_url || '—' }}</span></td></tr>
+          <tr><td class="text-medium-emphasis">Metadata URL</td><td><span class="text-caption">{{ resolved.meta_url || 'n/a' }}</span></td></tr>
         </tbody>
       </v-table>
       <div v-else-if="!resolveError" class="text-medium-emphasis text-caption">Loading...</div>
@@ -400,7 +400,7 @@ async function save() {
       throw new Error(msg || `HTTP ${r.status}`)
     }
     const d: ConfigStatusResponse = await r.json()
-    // Clear the form first, then apply the server's status — doing it the
+    // Clear the form first, then apply the server's status: doing it the
     // other way round wipes the just-saved values from the locked summary.
     clearForm()
     applyStatus(d)

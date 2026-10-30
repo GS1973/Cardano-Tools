@@ -150,7 +150,7 @@ describe('PoolParamsView refresh', () => {
     const sendBtn = w.findAll('button').find((b) => b.text() === 'Send to Signer')
     await sendBtn!.trigger('click')
     await flushPromises()
-    // Modal opens — fill 4-digit PIN, then click its primary button.
+    // Modal opens: fill 4-digit PIN, then click its primary button.
     const pinField = document.querySelector('input[inputmode="numeric"]') as HTMLInputElement | null
     if (pinField) {
       pinField.value = '1234'
@@ -200,7 +200,7 @@ describe('PoolParamsView refresh', () => {
     const sendBtn = w.findAll('button').find((b) => b.text() === 'Send to Signer')
     await sendBtn!.trigger('click')
     await flushPromises()
-    // Modal opens — fill 4-digit PIN, then click its primary button.
+    // Modal opens: fill 4-digit PIN, then click its primary button.
     const pinField = document.querySelector('input[inputmode="numeric"]') as HTMLInputElement | null
     if (pinField) {
       pinField.value = '1234'
@@ -214,7 +214,7 @@ describe('PoolParamsView refresh', () => {
     await flushPromises()
     expect(w.text(), 'send card visible after build').toContain('staleguard-test')
 
-    // Now edit a form field — the stale QR must be discarded.
+    // Now edit a form field: the stale QR must be discarded.
     const fixedCostInput = w
       .findAll('input[type="number"]')
       .find((i) => (i.element as HTMLInputElement).value === '170')
@@ -245,12 +245,12 @@ describe('PoolParamsView refresh', () => {
     const w = await mountView()
     expect(w.text()).not.toContain('ur:spo-tools-action-v2')
 
-    // Click "Send to Signer" — this triggers /api/pool/build and renders a QR card.
+    // Click "Send to Signer": this triggers /api/pool/build and renders a QR card.
     const sendBtn = w.findAll('button').find((b) => b.text() === 'Send to Signer')
     expect(sendBtn).toBeDefined()
     await sendBtn!.trigger('click')
     await flushPromises()
-    // Modal opens — fill 4-digit PIN, then click its primary button.
+    // Modal opens: fill 4-digit PIN, then click its primary button.
     const pinField = document.querySelector('input[inputmode="numeric"]') as HTMLInputElement | null
     if (pinField) {
       pinField.value = '1234'
@@ -264,7 +264,7 @@ describe('PoolParamsView refresh', () => {
     await flushPromises()
     expect(w.text(), 'send card visible after build').toContain('ur:spo-tools-action-v2/test1')
 
-    // Click Refresh — the send card / QR should be torn down.
+    // Click Refresh: the send card / QR should be torn down.
     const refreshBtn = w.findAll('button').find((b) => b.text() === 'Refresh')
     await refreshBtn!.trigger('click')
     await flushPromises()

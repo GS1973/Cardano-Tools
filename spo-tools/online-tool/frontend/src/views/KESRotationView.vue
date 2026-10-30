@@ -7,7 +7,7 @@
   <NotPairedCard v-else-if="notPaired" />
 
   <template v-else>
-  <!-- Genesis-not-available banner — Koios was unreachable at startup -->
+  <!-- Genesis-not-available banner: Koios was unreachable at startup -->
   <v-card v-if="genesisAvailable === false" class="mb-4">
     <v-card-text>
       <v-alert
@@ -40,7 +40,7 @@
     </v-card-text>
   </v-card>
 
-  <!-- Countdown banner — only when local state is bootstrapped -->
+  <!-- Countdown banner, only when local state is bootstrapped -->
   <v-card v-if="status && status.opcert_seconds_remaining !== null" class="mb-4">
     <v-card-text>
       <v-alert
@@ -65,7 +65,7 @@
       >
         On-chain counter ({{ status.on_chain_counter }}) is one behind your
         local record ({{ status.opcert_local_counter }}). This is expected
-        directly after a rotation — the chain will catch up when your pool
+        directly after a rotation: the chain will catch up when your pool
         produces its next block.
       </v-alert>
 
@@ -84,7 +84,7 @@
     </v-card-text>
   </v-card>
 
-  <!-- Bootstrap form — only when state is empty -->
+  <!-- Bootstrap form, only when state is empty -->
   <v-card v-if="status && status.opcert_start_kes_period === null" class="mb-4">
     <v-card-text>
       <v-alert type="info" density="comfortable" variant="tonal" class="mb-3">
@@ -240,16 +240,16 @@
 
       <h3 class="text-subtitle-1 mt-0 mb-2">Files written by signer</h3>
       <v-alert type="info" density="compact" variant="tonal" class="mb-3">
-        The signer wrote the three rotation files to its own disk. Pull the LUKS USB from the signer and use it to deploy the files; nothing leaves the signer over QR.
+        The signer wrote the three rotation files to its own disk. Pull the LUKS USB from the signer and use it to deploy the files. Nothing leaves the signer over QR.
       </v-alert>
       <v-table density="compact">
         <tbody>
           <tr><td class="text-medium-emphasis" style="width: 220px;">Output directory</td>
               <td><code>{{ result.output_dir }}</code></td></tr>
           <tr><td class="text-medium-emphasis">{{ result.kes_skey_filename }}</td>
-              <td>Block-producer node — scp + restart cardano-node</td></tr>
+              <td>Block-producer node: scp + restart cardano-node</td></tr>
           <tr><td class="text-medium-emphasis">{{ result.node_cert_filename }}</td>
-              <td>Block-producer node — scp + restart cardano-node</td></tr>
+              <td>Block-producer node: scp + restart cardano-node</td></tr>
           <tr><td class="text-medium-emphasis">{{ result.cold_counter_filename }}</td>
               <td>Replace local copy on this workstation and the backup on the producer</td></tr>
         </tbody>
@@ -446,7 +446,7 @@ async function loadStatus() {
         return
       }
       if (err.code === 'snapshot_not_ready') {
-        // Genesis params not loaded — show retry banner instead of an error
+        // Genesis params not loaded: show retry banner instead of an error
         genesisAvailable.value = false
         status.value = null
         return
@@ -499,7 +499,7 @@ async function saveBootstrap() {
     status.value = await r.json()
     notify.success('Local KES state bootstrapped')
     // Tell TopStatusBar to refresh immediately instead of waiting for
-    // its next 90-second poll — opcert_expires_at_unix has just changed.
+    // its next 90-second poll: opcert_expires_at_unix has just changed.
     window.dispatchEvent(new Event('spo-config-saved'))
   } catch (e: unknown) {
     stateError.value = e instanceof Error ? e.message : String(e)
@@ -590,12 +590,12 @@ async function submitFragments(fragments: string[]) {
     }
     const data = await r.json()
     result.value = data
-    notify.success(`Rotation result received — counter ${data.counter}, KES period ${data.kes_period}`)
+    notify.success(`Rotation result received: counter ${data.counter}, KES period ${data.kes_period}`)
     await nextTick()
     resultCardEl.value?.$el?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
     stopCycle()
     // Refresh status to pick up the auto-saved state, and tell
-    // TopStatusBar to do the same — opcert_expires_at_unix has changed.
+    // TopStatusBar to do the same: opcert_expires_at_unix has changed.
     await loadStatus()
     window.dispatchEvent(new Event('spo-config-saved'))
   } catch (e: unknown) {

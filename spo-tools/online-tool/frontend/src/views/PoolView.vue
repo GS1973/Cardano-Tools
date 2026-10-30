@@ -31,7 +31,7 @@
           <strong>Pending pool-parameter change</strong>
           <v-spacer />
           <span class="text-caption text-medium-emphasis">
-            Active in epoch {{ info.pending.active_epoch_no }} — {{ pendingCountdown }}
+            Active in epoch {{ info.pending.active_epoch_no }}: {{ pendingCountdown }}
           </span>
         </div>
         <div v-if="pendingDiffs.length" class="text-body-2">
@@ -43,7 +43,7 @@
           </div>
         </div>
         <div class="text-caption text-medium-emphasis mt-2">
-          Tx <code>{{ info.pending.tx_hash.slice(0, 16) }}…</code> —
+          Tx <code>{{ info.pending.tx_hash.slice(0, 16) }}…</code>:
           <a
             :href="`https://explorer.cardano.org/en/transaction?id=${info.pending.tx_hash}`"
             target="_blank"
@@ -54,8 +54,8 @@
 
       <v-table density="compact">
         <tbody>
-          <tr><td class="text-medium-emphasis" style="width: 200px;">Ticker</td><td><strong class="text-gold">{{ info.meta_json?.ticker ?? '—' }}</strong></td></tr>
-          <tr><td class="text-medium-emphasis">Name</td><td>{{ info.meta_json?.name ?? '—' }}</td></tr>
+          <tr><td class="text-medium-emphasis" style="width: 200px;">Ticker</td><td><strong class="text-gold">{{ info.meta_json?.ticker ?? 'n/a' }}</strong></td></tr>
+          <tr><td class="text-medium-emphasis">Name</td><td>{{ info.meta_json?.name ?? 'n/a' }}</td></tr>
           <tr v-if="info.meta_json?.homepage"><td class="text-medium-emphasis">Homepage</td><td><a v-if="safeHomepage" :href="safeHomepage" target="_blank" rel="noopener">{{ info.meta_json.homepage }}</a><span v-else>{{ info.meta_json.homepage }}</span></td></tr>
           <tr><td class="text-medium-emphasis">Pool ID</td><td><code>{{ info.pool_id_bech32 }}</code></td></tr>
           <tr><td class="text-medium-emphasis">Status</td><td>{{ info.pool_status }}</td></tr>
@@ -66,8 +66,8 @@
           <tr><td class="text-medium-emphasis">Live stake</td><td>{{ fmtAda(info.live_stake, 2) }}</td></tr>
           <tr><td class="text-medium-emphasis">Active stake</td><td>{{ fmtAda(info.active_stake, 2) }}</td></tr>
           <tr><td class="text-medium-emphasis">Saturation</td><td>{{ formatSaturation(info.live_saturation) }}</td></tr>
-          <tr><td class="text-medium-emphasis">Delegators</td><td>{{ info.live_delegators ?? '—' }}</td></tr>
-          <tr><td class="text-medium-emphasis">Blocks (lifetime)</td><td>{{ info.block_count ?? '—' }}</td></tr>
+          <tr><td class="text-medium-emphasis">Delegators</td><td>{{ info.live_delegators ?? 'n/a' }}</td></tr>
+          <tr><td class="text-medium-emphasis">Blocks (lifetime)</td><td>{{ info.block_count ?? 'n/a' }}</td></tr>
         </tbody>
       </v-table>
     </v-card-text>
@@ -147,11 +147,11 @@ async function load() {
 }
 
 function formatMargin(m: number | null | undefined): string {
-  return m == null ? '—' : `${(m * 100).toFixed(2)}%`
+  return m == null ? 'n/a' : `${(m * 100).toFixed(2)}%`
 }
 
 function formatSaturation(p: number | null | undefined): string {
-  return p == null ? '—' : `${p.toFixed(2)}%`
+  return p == null ? 'n/a' : `${p.toFixed(2)}%`
 }
 
 // Pool homepage comes from off-chain metadata, which any pool operator

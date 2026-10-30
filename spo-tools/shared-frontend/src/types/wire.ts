@@ -23,13 +23,13 @@ signature_hex: string, };
  * `deny_unknown_fields` rejects an unknown field inside the struct
  * variants (`key_hash` / `script_hash`); for the unit variants
  * (`abstain` / `no_confidence`) serde's internally-tagged deserializer
- * silently ignores extra fields — strictness there would need adjacent
+ * silently ignores extra fields: strictness there would need adjacent
  * tagging or a manual `Deserialize`, i.e. a wire-format break. Harmless
  * here: the body fingerprint is recomputed over the canonical
  * re-serialization on both sides, so a dropped field cannot
  * desynchronize the PIN proof, and the parent request struct already
  * denies unknown top-level fields. ts-rs cannot parse the attribute and
- * prints a harmless "attribute ignored" build warning — it has no
+ * prints a harmless "attribute ignored" build warning: it has no
  * TypeScript representation, so the generated bindings are unaffected.
  */
 export type DRepChoice = { "kind": "abstain" } | { "kind": "no_confidence" } | { "kind": "key_hash", hash_hex: string, } | { "kind": "script_hash", hash_hex: string, };
@@ -63,8 +63,8 @@ inputs: Array<UtxoInput>,
  * Operator-PIN proof: 8 bytes (16 hex chars) of blake2b-256 over a
  * domain-separated, length-prefixed preimage of the request kind,
  * `chain_context.built_at_unix`, the request-body fingerprint
- * (computed with this field blanked) and the operator's 4-digit PIN
- * — see [`crate::pin`]. The operator types the PIN at QR-build time
+ * (computed with this field blanked) and the operator's 4-digit PIN:
+ * see [`crate::pin`]. The operator types the PIN at QR-build time
  * on the online tool; the signer prompts for the same PIN after
  * decrypt and refuses to sign on mismatch. Operator-presence gate at
  * the moment of signing.
@@ -102,8 +102,8 @@ kes_period: string,
  * Operator-PIN proof: 8 bytes (16 hex chars) of blake2b-256 over a
  * domain-separated, length-prefixed preimage of the request kind,
  * `chain_context.built_at_unix`, the request-body fingerprint
- * (computed with this field blanked) and the operator's 4-digit PIN
- * — see [`crate::pin`]. The operator types the PIN at QR-build time
+ * (computed with this field blanked) and the operator's 4-digit PIN:
+ * see [`crate::pin`]. The operator types the PIN at QR-build time
  * on the online tool; the signer prompts for the same PIN after
  * decrypt and refuses to sign on mismatch. Operator-presence gate at
  * the moment of signing.
@@ -198,8 +198,8 @@ epoch_length: string,
  * Operator-PIN proof: 8 bytes (16 hex chars) of blake2b-256 over a
  * domain-separated, length-prefixed preimage of the request kind,
  * `chain_context.built_at_unix`, the request-body fingerprint
- * (computed with this field blanked) and the operator's 4-digit PIN
- * — see [`crate::pin`]. The operator types the PIN at QR-build time
+ * (computed with this field blanked) and the operator's 4-digit PIN:
+ * see [`crate::pin`]. The operator types the PIN at QR-build time
  * on the online tool; the signer prompts for the same PIN after
  * decrypt and refuses to sign on mismatch. Operator-presence gate at
  * the moment of signing.
@@ -252,8 +252,8 @@ inputs: Array<UtxoInput>,
  * Operator-PIN proof: 8 bytes (16 hex chars) of blake2b-256 over a
  * domain-separated, length-prefixed preimage of the request kind,
  * `chain_context.built_at_unix`, the request-body fingerprint
- * (computed with this field blanked) and the operator's 4-digit PIN
- * — see [`crate::pin`]. The operator types the PIN at QR-build time
+ * (computed with this field blanked) and the operator's 4-digit PIN:
+ * see [`crate::pin`]. The operator types the PIN at QR-build time
  * on the online tool; the signer prompts for the same PIN after
  * decrypt and refuses to sign on mismatch. Operator-presence gate at
  * the moment of signing.
@@ -269,7 +269,7 @@ export type PoolUpdateResult = { body_hash_hex: string, witnesses: Array<VkeyWit
  * internally-tagged deserializer silently ignores extra fields on unit
  * variants (see `DRepChoice` in `drep.rs`). The parent request struct
  * already denies unknown top-level fields. ts-rs cannot parse the
- * attribute and prints a harmless "attribute ignored" build warning — it
+ * attribute and prints a harmless "attribute ignored" build warning: it
  * has no TypeScript representation, so the generated bindings are
  * unaffected.
  */
@@ -295,7 +295,7 @@ pool_id_bech32: string, operator_pin_proof: string, chain_context: ChainContext,
 export type SpoWitnessResult = { body_hash_hex: string, witness: Cip100Witness, };
 
 /**
- * Optional public rationale for the vote — a document URL plus the
+ * Optional public rationale for the vote: a document URL plus the
  * 32-byte hash of its contents, the same shape as pool metadata. When
  * absent the on-chain `VotingProcedure.anchor` is null, which is valid.
  */
@@ -338,7 +338,7 @@ pool_id_bech32: string,
 /**
  * Governance action being voted on: 64-char hex of the proposal tx
  * hash plus the proposal index. Together they are the action id the
- * protocol uses — the source of truth, shown to the operator.
+ * protocol uses: the source of truth, shown to the operator.
  */
 action_tx_hash_hex: string, action_index: number, vote: VoteChoice, 
 /**
@@ -356,8 +356,8 @@ inputs: Array<UtxoInput>,
  * Operator-PIN proof: 8 bytes (16 hex chars) of blake2b-256 over a
  * domain-separated, length-prefixed preimage of the request kind,
  * `chain_context.built_at_unix`, the request-body fingerprint
- * (computed with this field blanked) and the operator's 4-digit PIN
- * — see [`crate::pin`]. The operator types the PIN at QR-build time
+ * (computed with this field blanked) and the operator's 4-digit PIN:
+ * see [`crate::pin`]. The operator types the PIN at QR-build time
  * on the online tool; the signer prompts for the same PIN after
  * decrypt and refuses to sign on mismatch. Operator-presence gate at
  * the moment of signing.
@@ -384,7 +384,7 @@ kind: WireKind,
  */
 tx_body_cbor_hex: string, fee_lovelace: string, net_to_reward_address_lovelace: string, change_to_payment_address_lovelace: string, ttl_slot: string, 
 /**
- * Bech32 of the addresses involved — purely for signer-side
+ * Bech32 of the addresses involved: purely for signer-side
  * preview; the signer does not act on these strings.
  */
 payment_address_bech32: string, reward_receive_address_bech32: string, pool_reward_address_bech32: string, 
@@ -399,8 +399,8 @@ inputs: Array<UtxoInput>,
  * Operator-PIN proof: 8 bytes (16 hex chars) of blake2b-256 over a
  * domain-separated, length-prefixed preimage of the request kind,
  * `chain_context.built_at_unix`, the request-body fingerprint
- * (computed with this field blanked) and the operator's 4-digit PIN
- * — see [`crate::pin`]. The operator types the PIN at QR-build time
+ * (computed with this field blanked) and the operator's 4-digit PIN:
+ * see [`crate::pin`]. The operator types the PIN at QR-build time
  * on the online tool; the signer prompts for the same PIN after
  * decrypt and refuses to sign on mismatch. Operator-presence gate at
  * the moment of signing.

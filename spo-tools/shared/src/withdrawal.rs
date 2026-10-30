@@ -1,4 +1,4 @@
-//! Reward-withdrawal request/result types — wire format between online
+//! Reward-withdrawal request/result types: wire format between online
 //! tool and signer.
 //!
 //! The signer is *pure crypto*. Everything Cardano-protocol-shaped (the
@@ -7,13 +7,13 @@
 //! the request fields below (see crate::tx_validator),
 //! then hashes and signs.
 //!
-//! Amount and address fields are not just preview hints — they are the
+//! Amount and address fields are not just preview hints: they are the
 //! authoritative description of the operation. The validator rejects any
 //! body that does not match them, so a tampered body cannot be signed.
 
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 use serde_with::{serde_as, DisplayFromStr};
+use ts_rs::TS;
 
 use crate::chain_context::ChainContext;
 use crate::utxo::UtxoInput;
@@ -45,7 +45,7 @@ pub struct WithdrawalRequest {
     #[serde_as(as = "DisplayFromStr")]
     #[ts(type = "string")]
     pub ttl_slot: u64,
-    /// Bech32 of the addresses involved — purely for signer-side
+    /// Bech32 of the addresses involved: purely for signer-side
     /// preview; the signer does not act on these strings.
     pub payment_address_bech32: String,
     pub reward_receive_address_bech32: String,
@@ -58,8 +58,8 @@ pub struct WithdrawalRequest {
     /// Operator-PIN proof: 8 bytes (16 hex chars) of blake2b-256 over a
     /// domain-separated, length-prefixed preimage of the request kind,
     /// `chain_context.built_at_unix`, the request-body fingerprint
-    /// (computed with this field blanked) and the operator's 4-digit PIN
-    /// — see [`crate::pin`]. The operator types the PIN at QR-build time
+    /// (computed with this field blanked) and the operator's 4-digit PIN:
+    /// see [`crate::pin`]. The operator types the PIN at QR-build time
     /// on the online tool; the signer prompts for the same PIN after
     /// decrypt and refuses to sign on mismatch. Operator-presence gate at
     /// the moment of signing.
@@ -74,4 +74,3 @@ pub struct WithdrawalResult {
     pub body_hash_hex: String,
     pub witnesses: Vec<VkeyWitness>,
 }
-

@@ -9,11 +9,11 @@ Self-hosted, open source, Linux-only. No Docker, no SaaS, no mobile apps.
 
 ## Status
 
-**v1.1.0**: production-ready. Six operational features plus a
+**v1.1.2**: production-ready. Six operational features plus a
 rationale-witness step, body-level validation on the signer, and an
 end-to-end encrypted channel between online tool and signer. The six
 operational features are validated on Cardano mainnet against a live
-stake pool; the rationale-witness step is verified at component level,
+stake pool. The rationale-witness step is verified at component level,
 with a live vote carrying a witnessed rationale the remaining check.
 
 ## Screenshots
@@ -64,22 +64,33 @@ air-gapped signer and back. Every field is shown on the signer before anything i
   on the next epoch boundary.
 - **SPO governance vote**: cast a Yes / No / Abstain vote on an open
   Conway governance action with the pool's full stake weight. Signed by
-  the **cold key**; the signer additionally checks that the cold
+  the **cold key**. The signer additionally checks that the cold
   verification key hashes to the voted pool id. Optional CIP-136
   rationale anchor.
 - **Rationale witness (CIP-136)**: a separate step, not a transaction.
   The online tool canonicalises a hand-authored rationale body (URDNA2015,
-  per CIP-100); the signer signs its blake2b-256 with the **cold key** and
+  per CIP-100). The signer signs its blake2b-256 with the **cold key** and
   the tool injects the CIP-100 author witness, so the vote's anchor renders
   as a proper rationale instead of raw JSON. The signer refuses to sign
-  anything that is not a canonical governance-metadata body.
+  anything that is not a canonical governance-metadata body. Because the
+  canonicalisation runs in the online tool's browser, the signer does not
+  take the rationale on trust: it reads the text back out of the exact
+  bytes it is about to sign and shows it field by field, next to the raw
+  canonical body. Check there that it is the rationale you wrote.
+  The online tool can also fetch a rationale URL to compute its anchor
+  hash, and fetch a pool metadata URL to compute the hash of what it
+  serves, so the certificate carries the hash of the served bytes and not
+  of a local copy. It only fetches over `https://` and only from public
+  internet addresses (not from this machine, your local network or a cloud
+  metadata address, also not through a redirect) and does not send your
+  Koios API key along.
 
 In addition to these features, the channel between
 online tool and signer is **end-to-end encrypted**. After a one-time
 visual-fingerprint pairing, every QR / UR payload is sealed with
 X25519 + XChaCha20-Poly1305. A passive observer of the QR channel
-sees only ciphertext; substitution mid-channel is rejected by the
-AEAD tag; a man-in-the-middle during the pairing dance is caught
+sees only ciphertext. Substitution mid-channel is rejected by the
+AEAD tag. A man-in-the-middle during the pairing dance is caught
 visually because the 16-byte fingerprint on the two screens will not
 agree. Operations refuse to run unpaired.
 
@@ -103,7 +114,7 @@ Two `cardano-cli` signing-key forms are accepted for the **payment** and
 - **Extended BIP32-Ed25519**:
   `PaymentExtendedSigningKeyShelley_ed25519_bip32` /
   `StakeExtendedSigningKeyShelley_ed25519_bip32`. This is what a
-  mnemonic-wallet owner (Eternl, Lace, Yoroi, …) gets by exporting the
+  mnemonic-wallet owner gets by exporting the
   recovery phrase with `cardano-address` (standard CIP-1852 path) and
   converting with `cardano-cli key convert-cardano-address-key`. The
   signer detects the extended form automatically and signs scalar-based,
@@ -114,10 +125,10 @@ Two `cardano-cli` signing-key forms are accepted for the **payment** and
 
 The pool **cold key** is always a `cardano-cli`-generated
 `StakePoolSigningKey_ed25519` (plain 32-byte, or the legacy 64-byte
-form); cold keys are not mnemonic-derived. KES and VRF keys keep their
+form). Cold keys are not mnemonic-derived. KES and VRF keys keep their
 cardano-cli formats.
 
-Hardware wallets (Ledger, Trezor) are not supported.
+Hardware wallets are not supported.
 
 ## Limitations (v1.1)
 
@@ -143,7 +154,7 @@ same payment signing key:
   owner stake key).
 
 Both addresses are controlled by the same `payment.skey`. The pool's
-pledge sits at the base-form address; day-to-day fee UTxOs may live
+pledge sits at the base-form address. Day-to-day fee UTxOs may live
 at either form depending on how cardano-cli wallets were created.
 
 This shared-key setup means a compromised online tool, even with the
@@ -160,7 +171,19 @@ by the recommended setup below:
    cross-checks `body.inputs` against `request.inputs` and rejects a
    tx whose inputs do not all sit at the request's
    `payment_address_bech32`.
-2. Operator PIN (typed on the online tool, retyped on the signer)
+2. The signer refuses to sign unless the request's payment address is
+   controlled by the **payment key it holds** (the address's payment
+   credential must be the hash of that key). The change can therefore
+   only return to an address your own payment key can spend from,
+   whatever the online tool names. Only the payment part is checked, so
+   both setups below work: the pledged base address, or a separate fee
+   address with its own key.
+3. The signer never signs a **fee above 3 ADA**, whatever the request
+   says. An honest fee is about 0.17 to 0.25 ADA.
+4. The signer decodes the transaction body and holds it against the
+   request **before** showing anything. A request that misdescribes its
+   body is refused without a preview.
+5. Operator PIN (typed on the online tool, retyped on the signer)
    gates the actual signing.
 
 A fully-compromised online tool can report *consistent but false* input
@@ -184,7 +207,7 @@ you fill in the online tool's Setup page:
   guarantees a withdrawal cannot accidentally include a pledged
   UTxO.
 
-Setup (a) is the lower-friction option; (b) is stricter. Either is
+Setup (a) is the lower-friction option. (b) is stricter. Either is
 acceptable. Setting `payment_address` to an enterprise address whose
 stake credential is *also* a pledged stake key is **not** acceptable
 and is the scenario the validator alone cannot defend against.
@@ -196,7 +219,9 @@ no network: at startup it shows a banner asking you to acknowledge
 the air-gap, and a small monitor periodically samples each live
 non-loopback interface's `carrier` flag and `rx_bytes`/`tx_bytes`
 counters, flagging the host as air-gapped when no traffic crosses any
-link. **Treat both as advisory.** A determined attacker who
+link (the top bar then reads "No network detected", which is all it
+can honestly say). **Treat both as advisory.** No operation consults
+the monitor. It gates nothing. A determined attacker who
 already has shell access on the signer host can bring the network
 back up after the check passes. The trust anchor is the operator
 keeping the signer host physically separated, not the software
@@ -228,7 +253,7 @@ sibling checkout.
 
 ## Build
 
-Requires Rust 1.85+ (stable) and Node.js 22+, with `airgap-core` checked
+Requires Rust 1.95+ (stable) and Node.js 22+, with `airgap-core` checked
 out as a sibling directory.
 
 ```bash
@@ -242,7 +267,7 @@ cargo build --release
 ```
 
 Binaries land in `target/release/spo-tools-online` and
-`target/release/spo-tools-signer`. Both are self-contained; no further
+`target/release/spo-tools-signer`. Both are self-contained. No further
 dependencies at runtime besides a modern Linux kernel and a recent
 browser to drive the web UI.
 
@@ -273,8 +298,9 @@ cargo test -p signer --test round_trip
 `--listen ADDR:PORT` is required: there is no default port, both for
 security (no fixed port to scan) and to allow side-by-side instances.
 For a self-hosted or custom *mainnet* Koios deployment, add
-`--koios-url URL` (defaults to `https://api.koios.rest/api/v1`). This is
-not a preprod switch: the binary is hard-wired to mainnet (network id,
+`--koios-url URL` (defaults to `https://api.koios.rest/api/v1`). The URL
+must be https, or plain http on the same machine. This is not a preprod
+switch: the binary is hard-wired to mainnet (network id,
 address prefixes, Shelley-era slot anchors), so pointing it at a
 preprod/preview Koios yields wrong timings and unsignable transactions.
 `RUST_LOG` overrides log filtering.
@@ -308,7 +334,7 @@ in memory only for the duration of the operation.
 ### Pair the two sides (one-time, ~1 min)
 
 Once both binaries are running, open **Pairing** in either UI. Each
-side displays its own public key as a static QR; scan the other side's
+side displays its own public key as a static QR. Scan the other side's
 QR with the camera, and visually compare the 16-byte fingerprint shown
 on both screens. They must match exactly. Click Confirm and the
 channel is permanently encrypted between this online tool and this
@@ -346,12 +372,15 @@ as text.
 
 **Deploying a KES rotation.** The signer returns the new `kes.skey`,
 `node.cert` and `cold.counter`. Deploy `kes.skey` and `node.cert` to your
-block-producer node and restart it; keep `cold.counter` with your
+block-producer node and restart it. Keep `cold.counter` with your
 cold-key backups. Rotate before the current operational certificate's
 KES-period window expires, the KES Rotation page shows a live countdown.
 Immediately after a rotation the on-chain op-cert counter trails your
 local record by one until the pool mints its next block, which is
-expected.
+expected. The signer refuses a counter past the next one in
+`cold.counter`, because the network rejects an opcert that skips a
+number. If you ever issued an opcert outside this tool, put that
+`cold.counter` in the signer's output directory first.
 
 ## Maintainer
 
@@ -380,8 +409,8 @@ private keys.
 
 You alone are responsible for:
 
-- safeguarding your signing keys (cold, KES, VRF, payment, stake);
-- verifying every transaction on the signer's screen before you approve it;
+- safeguarding your signing keys (cold, KES, VRF, payment, stake),
+- verifying every transaction on the signer's screen before you approve it,
 - the outcome of any transaction you sign and submit.
 
 To the fullest extent permitted by law, the author accepts no liability for
@@ -401,4 +430,4 @@ before you rely on it.
 Dual-licensed under [MIT](LICENSE-MIT) or [Apache 2.0](LICENSE-APACHE),
 at your option.
 
-Third-party code vendored under `vendor/` is distributed under its own licenses (BSD-3-Clause and Apache-2.0); see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+Third-party code vendored under `vendor/` is distributed under its own licenses (BSD-3-Clause and Apache-2.0). See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

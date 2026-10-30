@@ -22,7 +22,7 @@ const anyForeign = computed(() =>
 
 <template>
   <div v-if="inputs && inputs.length" class="field">
-    <div class="field-label">Funding inputs ({{ inputs.length }}) — {{ fmtAda(total) }} total</div>
+    <div class="field-label">Funding inputs ({{ inputs.length }}): {{ fmtAda(total) }} total</div>
     <div class="field-value">
       <div
         v-for="(i, idx) in inputs"

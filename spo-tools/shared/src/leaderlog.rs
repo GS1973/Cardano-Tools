@@ -11,8 +11,8 @@
 //! easy to debug, and well under one QR frame (typically a few hundred bytes).
 
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 use serde_with::{serde_as, DisplayFromStr};
+use ts_rs::TS;
 
 /// Sent online → signer. Everything the signer needs to compute the
 /// schedule, with one exception: the VRF private key, which never leaves
@@ -66,8 +66,8 @@ pub struct LeaderlogRequest {
     /// Operator-PIN proof: 8 bytes (16 hex chars) of blake2b-256 over a
     /// domain-separated, length-prefixed preimage of the request kind,
     /// `chain_context.built_at_unix`, the request-body fingerprint
-    /// (computed with this field blanked) and the operator's 4-digit PIN
-    /// — see [`crate::pin`]. The operator types the PIN at QR-build time
+    /// (computed with this field blanked) and the operator's 4-digit PIN:
+    /// see [`crate::pin`]. The operator types the PIN at QR-build time
     /// on the online tool; the signer prompts for the same PIN after
     /// decrypt and refuses to sign on mismatch. Operator-presence gate at
     /// the moment of signing.
@@ -95,7 +95,6 @@ pub struct LeaderlogResult {
     pub slots: Vec<u64>,
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,11 +102,10 @@ mod tests {
     fn sample_request() -> LeaderlogRequest {
         LeaderlogRequest {
             kind: crate::wire_kind::WireKind::Leaderlog,
-            pool_id_bech32:
-                "pool1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq8a7a2d".into(),
+            pool_id_bech32: "pool1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq8a7a2d".into(),
             epoch: 100,
-            epoch_nonce_hex:
-                "deadbeefcafebabe1234567890abcdefdeadbeefcafebabe1234567890abcdef".into(),
+            epoch_nonce_hex: "deadbeefcafebabe1234567890abcdefdeadbeefcafebabe1234567890abcdef"
+                .into(),
             // pool_stake / total_active_stake = 1.0e-4 (matches the old f64 sample).
             pool_stake: 2_000_000_000,
             total_active_stake: 20_000_000_000_000,
@@ -130,8 +128,7 @@ mod tests {
 
     fn sample_result() -> LeaderlogResult {
         LeaderlogResult {
-            pool_id_bech32:
-                "pool1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq8a7a2d".into(),
+            pool_id_bech32: "pool1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq8a7a2d".into(),
             epoch: 100,
             slots: vec![152_812_801, 152_900_000, 153_100_500],
         }
@@ -164,9 +161,18 @@ mod tests {
         let bytes = serde_json::to_vec(&req).expect("encode");
         let alice = crate::crypto::generate_keypair().unwrap();
         let bob = crate::crypto::generate_keypair().unwrap();
-        let parts = qr::encode_encrypted_payload(&bytes, &bob.public, &alice.secret, qr::Direction::Request).expect("qr encode");
+        let parts = qr::encode_encrypted_payload(
+            &bytes,
+            &bob.public,
+            &alice.secret,
+            qr::Direction::Request,
+        )
+        .expect("qr encode");
 
-        let recovered = qr::decode_encrypted_parts(&parts, &alice.public, &bob.secret, qr::Direction::Request).expect("qr decode").expect("complete");
+        let recovered =
+            qr::decode_encrypted_parts(&parts, &alice.public, &bob.secret, qr::Direction::Request)
+                .expect("qr decode")
+                .expect("complete");
         let decoded: LeaderlogRequest = serde_json::from_slice(&recovered).expect("json decode");
 
         assert_eq!(req, decoded);

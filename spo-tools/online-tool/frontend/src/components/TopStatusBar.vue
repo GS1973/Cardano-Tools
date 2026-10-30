@@ -46,7 +46,7 @@ async function refresh() {
       opcertExpiresUnix.value = null
       const err = await extractError<ErrorCode>(r)
       if (err.code === 'not_configured') {
-        koiosTitle.value = 'Pool not configured — go to Setup'
+        koiosTitle.value = 'Pool not configured: go to Setup'
       } else if (err.code === 'upstream_unavailable') {
         koiosTitle.value = 'Koios rate-limited (paused 5 min)'
         backoffUntil = Date.now() + 5 * 60_000

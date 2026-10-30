@@ -19,18 +19,92 @@ use pallas_primitives::conway::{
 use pallas_primitives::{Hash, NetworkId, StakeCredential, TransactionInput};
 
 // Role-neutral tx primitives, shared with DREP Tools via airgap-core.
+use shared::asset::Asset;
 pub use shared::tx::{
     assemble_signed_tx, check_tx_hash_hex_len, decode_address, make_output, parse_input,
     RawVkeyWitness, TxBuildError, TxInput,
 };
-use shared::asset::Asset;
 use shared::tx::{make_asset_output, min_ada_for_output};
 
+/// The protocol parameters the fee and the min-ADA change are computed from,
+/// read live from the chain-data provider and checked against the
+/// constitution's guardrails before use (`koios::protocol_params`).
+#[derive(Debug, Clone, Copy)]
+pub struct FeeParams {
+    /// `txFeePerByte`.
+    pub min_fee_a: u64,
+    /// `txFeeFixed`.
+    pub min_fee_b: u64,
+    /// `utxoCostPerByte`.
+    pub utxo_cost_per_byte: u64,
+}
 
-/// Inputs to build a withdrawal transaction body.
-///
-/// All amounts are in lovelace.
-const UTXO_COST_PER_BYTE: u64 = 4310;
+/// Conservative per-witness wire size: array tag + (len+vkey 32) + (len+sig 64).
+const WITNESS_BYTES: u64 = 100;
+/// Witness-set map + outer tx array + a small safety margin (also covers the
+/// fee field growing from the draft's 0 to its real value).
+const TX_WRAP_OVERHEAD: u64 = 32;
+
+/// Linear Cardano fee over the estimated wire size of the fully signed tx.
+pub fn fee_for_body(body_cbor_len: usize, n_witnesses: u64, p: &FeeParams) -> u64 {
+    let size = body_cbor_len as u64 + n_witnesses * WITNESS_BYTES + TX_WRAP_OVERHEAD;
+    p.min_fee_a.saturating_mul(size).saturating_add(p.min_fee_b)
+}
+
+/// The kinds of transaction this tool builds, for the preview-screen fee
+/// estimate and the witness count each one carries.
+#[derive(Debug, Clone, Copy)]
+pub enum TxKind {
+    /// Payment and reward-stake witnesses.
+    Withdrawal,
+    /// Payment and owner-stake witnesses.
+    DrepDelegation,
+    /// Payment and cold-key witnesses.
+    Vote,
+    /// Payment, cold-key and owner-stake witnesses.
+    PoolUpdate { relays: usize },
+}
+
+impl TxKind {
+    fn witnesses(self) -> u64 {
+        match self {
+            TxKind::PoolUpdate { .. } => 3,
+            _ => 2,
+        }
+    }
+
+    /// Draft-body bytes independent of the inputs and change assets, sized
+    /// for the largest body of the kind (a full anchor, metadata URL and
+    /// relay list), so the preview estimate stays at or above the fee the
+    /// builder later computes.
+    fn preview_body_bytes(self) -> u64 {
+        match self {
+            TxKind::Withdrawal => 300,
+            TxKind::DrepDelegation => 250,
+            TxKind::Vote => 400,
+            TxKind::PoolUpdate { relays } => 500 + relays as u64 * 80,
+        }
+    }
+}
+
+/// Body bytes per spent input: 2-element array, 32-byte hash bytestring, index.
+const PREVIEW_INPUT_BYTES: u64 = 40;
+/// Change-output bytes per preserved native asset, conservatively.
+const PREVIEW_ASSET_BYTES: u64 = 80;
+
+/// Preview-screen fee estimate, made before the real body exists. The
+/// transaction itself carries the fee its encoded body needs.
+pub fn preview_fee_lovelace(
+    kind: TxKind,
+    n_inputs: usize,
+    n_change_assets: usize,
+    p: &FeeParams,
+) -> u64 {
+    let body_bytes = kind.preview_body_bytes()
+        + n_inputs as u64 * PREVIEW_INPUT_BYTES
+        + n_change_assets as u64 * PREVIEW_ASSET_BYTES;
+    fee_for_body(body_bytes as usize, kind.witnesses(), p)
+}
 
 /// Shelley/Conway CDDL size caps: pool-metadata `url` and relay `dns_name`
 /// are `text .size (0..64)`; a governance anchor `url` is
@@ -49,7 +123,7 @@ const CDDL_LIMIT_MARKER: &str = "CDDL limit";
 
 /// When `e` is one of this module's CDDL length-cap rejections (relay
 /// DNS name, pool metadata URL, vote anchor URL), return its message so
-/// the handler can surface it as `ErrorEnvelope::invalid` — these are
+/// the handler can surface it as `ErrorEnvelope::invalid`: these are
 /// operator-typed values, and the actionable "exceeds the N-byte CDDL
 /// limit" text must reach the operator, not just the server log. `None`
 /// for every other build error (those stay internal).
@@ -62,21 +136,28 @@ pub(crate) fn cddl_len_violation(e: &TxBuildError) -> Option<&str> {
 
 /// Change output back to the payment address, preserving any native assets the
 /// spent UTxOs carry (spo sends no assets, so all of them return as change).
-/// Guards that the change ADA covers the output's min-ADA — coin-only change
-/// included — so the node will not reject an under-funded output.
+/// Guards that the change ADA covers the output's min-ADA, coin-only change
+/// included, so the node will not reject an under-funded output.
 fn change_output(
     payment: Vec<u8>,
     change: u64,
     assets: &[Asset],
+    utxo_cost_per_byte: u64,
 ) -> Result<TransactionOutput, TxBuildError> {
     let out = make_asset_output(payment, change, assets)?;
-    let need = min_ada_for_output(&out, UTXO_COST_PER_BYTE)?;
+    let need = min_ada_for_output(&out, utxo_cost_per_byte)?;
     if change < need {
-        return Err(TxBuildError::InsufficientInputs { fee: need, utxo_total: change });
+        return Err(TxBuildError::InsufficientInputs {
+            fee: need,
+            utxo_total: change,
+        });
     }
     Ok(out)
 }
 
+/// Inputs to build a withdrawal transaction body.
+///
+/// All amounts are in lovelace.
 pub struct WithdrawalInputs<'a> {
     pub utxo_inputs: &'a [TxInput],
     pub utxo_total_lovelace: u64,
@@ -85,31 +166,49 @@ pub struct WithdrawalInputs<'a> {
     pub reward_receive_address_bech32: &'a str,
     pub pool_reward_address_bech32: &'a str,
     pub rewards_lovelace: u64,
-    pub fee_lovelace: u64,
+    /// Live fee parameters. The fee itself follows from the encoded body.
+    pub fee_params: FeeParams,
     pub ttl_slot: u64,
 }
-
 
 #[derive(Debug)]
 pub struct WithdrawalTxBody {
     pub body_cbor: Vec<u8>,
+    /// The fee this body carries, computed from its own encoded size.
+    pub fee_lovelace: u64,
     pub net_to_reward_address_lovelace: u64,
     pub change_to_payment_address_lovelace: u64,
 }
 
+/// Build the body with the fee its own encoded size needs: a draft at fee 0
+/// sizes the body, then the real fee is encoded. The fee field and the change
+/// grow by a few bytes at most, which the size margin in [`fee_for_body`] covers.
 pub fn build_withdrawal_body(input: &WithdrawalInputs) -> Result<WithdrawalTxBody, TxBuildError> {
+    let kind = TxKind::Withdrawal;
+    let draft = withdrawal_body_with_fee(input, 0)?;
+    withdrawal_body_with_fee(
+        input,
+        fee_for_body(draft.body_cbor.len(), kind.witnesses(), &input.fee_params),
+    )
+}
+
+fn withdrawal_body_with_fee(
+    input: &WithdrawalInputs,
+    fee: u64,
+) -> Result<WithdrawalTxBody, TxBuildError> {
     let payment_addr_bytes = decode_address(input.payment_address_bech32, "addr")?;
     let reward_addr_bytes = decode_address(input.reward_receive_address_bech32, "addr")?;
     let pool_reward_account_bytes = decode_address(input.pool_reward_address_bech32, "stake")?;
 
     let net_to_reward_address_lovelace = input.rewards_lovelace;
-    let change_to_payment_address_lovelace = input
-        .utxo_total_lovelace
-        .checked_sub(input.fee_lovelace)
-        .ok_or(TxBuildError::InsufficientInputs {
-            fee: input.fee_lovelace,
-            utxo_total: input.utxo_total_lovelace,
-        })?;
+    let change_to_payment_address_lovelace =
+        input
+            .utxo_total_lovelace
+            .checked_sub(fee)
+            .ok_or(TxBuildError::InsufficientInputs {
+                fee,
+                utxo_total: input.utxo_total_lovelace,
+            })?;
 
     let inputs: Vec<TransactionInput> = input
         .utxo_inputs
@@ -135,7 +234,7 @@ pub fn build_withdrawal_body(input: &WithdrawalInputs) -> Result<WithdrawalTxBod
     // build a tx the ledger rejects with OutputTooSmallUTxO after the full
     // signing ceremony.
     let reward_output = make_output(reward_addr_bytes.clone(), net_to_reward_address_lovelace);
-    let reward_min = min_ada_for_output(&reward_output, UTXO_COST_PER_BYTE)?;
+    let reward_min = min_ada_for_output(&reward_output, input.fee_params.utxo_cost_per_byte)?;
     if net_to_reward_address_lovelace < reward_min {
         return Err(TxBuildError::InsufficientInputs {
             fee: reward_min,
@@ -149,6 +248,7 @@ pub fn build_withdrawal_body(input: &WithdrawalInputs) -> Result<WithdrawalTxBod
             payment_addr_bytes.clone(),
             change_to_payment_address_lovelace,
             input.change_assets,
+            input.fee_params.utxo_cost_per_byte,
         )?,
     ];
 
@@ -160,7 +260,7 @@ pub fn build_withdrawal_body(input: &WithdrawalInputs) -> Result<WithdrawalTxBod
     let body = TransactionBody {
         inputs: Set::from(inputs),
         outputs,
-        fee: input.fee_lovelace,
+        fee,
         ttl: Some(input.ttl_slot),
         certificates: None,
         withdrawals: Some(withdrawals),
@@ -184,12 +284,12 @@ pub fn build_withdrawal_body(input: &WithdrawalInputs) -> Result<WithdrawalTxBod
     minicbor::encode(&body, &mut buf).map_err(|e| TxBuildError::Cbor(e.to_string()))?;
 
     Ok(WithdrawalTxBody {
+        fee_lovelace: fee,
         body_cbor: buf,
         net_to_reward_address_lovelace,
         change_to_payment_address_lovelace,
     })
 }
-
 
 // ---------------------------------------------------------------------------
 // DRep delegation
@@ -214,29 +314,48 @@ pub struct DRepDelegationInputs<'a> {
     pub payment_address_bech32: &'a str,
     pub stake_credential_bech32: &'a str,
     pub drep_choice: DRepChoice,
-    pub fee_lovelace: u64,
+    /// Live fee parameters. The fee itself follows from the encoded body.
+    pub fee_params: FeeParams,
     pub ttl_slot: u64,
 }
 
 #[derive(Debug)]
 pub struct DRepDelegationTxBody {
     pub body_cbor: Vec<u8>,
+    /// The fee this body carries, computed from its own encoded size.
+    pub fee_lovelace: u64,
     pub change_to_payment_address_lovelace: u64,
 }
 
+/// Build the body with the fee its own encoded size needs: a draft at fee 0
+/// sizes the body, then the real fee is encoded. The fee field and the change
+/// grow by a few bytes at most, which the size margin in [`fee_for_body`] covers.
 pub fn build_drep_delegation_body(
     input: &DRepDelegationInputs,
+) -> Result<DRepDelegationTxBody, TxBuildError> {
+    let kind = TxKind::DrepDelegation;
+    let draft = drep_delegation_body_with_fee(input, 0)?;
+    drep_delegation_body_with_fee(
+        input,
+        fee_for_body(draft.body_cbor.len(), kind.witnesses(), &input.fee_params),
+    )
+}
+
+fn drep_delegation_body_with_fee(
+    input: &DRepDelegationInputs,
+    fee: u64,
 ) -> Result<DRepDelegationTxBody, TxBuildError> {
     let payment_addr_bytes = decode_address(input.payment_address_bech32, "addr")?;
     let stake_cred = stake_credential_from_bech32(input.stake_credential_bech32)?;
 
-    let change_to_payment_address_lovelace = input
-        .utxo_total_lovelace
-        .checked_sub(input.fee_lovelace)
-        .ok_or(TxBuildError::InsufficientInputs {
-            fee: input.fee_lovelace,
-            utxo_total: input.utxo_total_lovelace,
-        })?;
+    let change_to_payment_address_lovelace =
+        input
+            .utxo_total_lovelace
+            .checked_sub(fee)
+            .ok_or(TxBuildError::InsufficientInputs {
+                fee,
+                utxo_total: input.utxo_total_lovelace,
+            })?;
 
     let inputs: Vec<TransactionInput> = input
         .utxo_inputs
@@ -248,6 +367,7 @@ pub fn build_drep_delegation_body(
         payment_addr_bytes.clone(),
         change_to_payment_address_lovelace,
         input.change_assets,
+        input.fee_params.utxo_cost_per_byte,
     )?];
 
     let drep = match input.drep_choice {
@@ -263,7 +383,7 @@ pub fn build_drep_delegation_body(
     let body = TransactionBody {
         inputs: Set::from(inputs),
         outputs,
-        fee: input.fee_lovelace,
+        fee,
         ttl: Some(input.ttl_slot),
         certificates: Some(certificates),
         withdrawals: None,
@@ -286,11 +406,11 @@ pub fn build_drep_delegation_body(
     let mut buf = Vec::new();
     minicbor::encode(&body, &mut buf).map_err(|e| TxBuildError::Cbor(e.to_string()))?;
     Ok(DRepDelegationTxBody {
+        fee_lovelace: fee,
         body_cbor: buf,
         change_to_payment_address_lovelace,
     })
 }
-
 
 fn stake_credential_from_bech32(bech32: &str) -> Result<StakeCredential, TxBuildError> {
     let parsed = Address::from_bech32(bech32)
@@ -319,10 +439,7 @@ pub enum RelayInput {
         ipv6: Option<[u8; 16]>,
     },
     /// DNS A record + port (mapped to Relay::SingleHostName).
-    SingleHostName {
-        port: Option<u16>,
-        dns: String,
-    },
+    SingleHostName { port: Option<u16>, dns: String },
     /// DNS SRV record (mapped to Relay::MultiHostName).
     MultiHostName { dns: String },
 }
@@ -343,7 +460,7 @@ pub struct PoolUpdateInputs<'a> {
     pub utxo_total_lovelace: u64,
     pub change_assets: &'a [Asset],
     pub payment_address_bech32: &'a str,
-    /// Pool ID bech32 (`pool1...`) — 28-byte operator hash.
+    /// Pool ID bech32 (`pool1...`): 28-byte operator hash.
     pub pool_id_bech32: &'a str,
     /// Current VRF keyhash hex (32 bytes). Read-only in v1.0.
     pub vrf_keyhash_hex: &'a str,
@@ -353,7 +470,7 @@ pub struct PoolUpdateInputs<'a> {
     /// to numerator/denominator with chosen precision.
     pub margin_numerator: u64,
     pub margin_denominator: u64,
-    /// Reward stake address (`stake1...`) — 29 bytes on the wire.
+    /// Reward stake address (`stake1...`): 29 bytes on the wire.
     pub reward_account_bech32: &'a str,
     /// Pool owner stake addresses (`stake1...`). v1.0 enforces single owner
     /// at the route level; this slice may carry one or more for tests.
@@ -361,22 +478,40 @@ pub struct PoolUpdateInputs<'a> {
     pub relays: &'a [RelayInput],
     pub metadata_url: Option<&'a str>,
     pub metadata_hash_hex: Option<&'a str>,
-    pub fee_lovelace: u64,
+    /// Live fee parameters. The fee itself follows from the encoded body.
+    pub fee_params: FeeParams,
     pub ttl_slot: u64,
 }
 
 #[derive(Debug)]
 pub struct PoolUpdateTxBody {
     pub body_cbor: Vec<u8>,
+    /// The fee this body carries, computed from its own encoded size.
+    pub fee_lovelace: u64,
     pub change_to_payment_address_lovelace: u64,
 }
 
-pub fn build_pool_update_body(
+/// Build the body with the fee its own encoded size needs: a draft at fee 0
+/// sizes the body, then the real fee is encoded. The fee field and the change
+/// grow by a few bytes at most, which the size margin in [`fee_for_body`] covers.
+pub fn build_pool_update_body(input: &PoolUpdateInputs) -> Result<PoolUpdateTxBody, TxBuildError> {
+    let kind = TxKind::PoolUpdate {
+        relays: input.relays.len(),
+    };
+    let draft = pool_update_body_with_fee(input, 0)?;
+    pool_update_body_with_fee(
+        input,
+        fee_for_body(draft.body_cbor.len(), kind.witnesses(), &input.fee_params),
+    )
+}
+
+fn pool_update_body_with_fee(
     input: &PoolUpdateInputs,
+    fee: u64,
 ) -> Result<PoolUpdateTxBody, TxBuildError> {
     let payment_addr_bytes = decode_address(input.payment_address_bech32, "addr")?;
 
-    // Pool ID (operator) — 28-byte hash from bech32 "pool1..."
+    // Pool ID (operator): 28-byte hash from bech32 "pool1..."
     let (hrp, pool_id_bytes) = bech32::decode(input.pool_id_bech32)
         .map_err(|e| TxBuildError::Bech32(input.pool_id_bech32.to_string(), e.to_string()))?;
     if hrp.as_str() != "pool" {
@@ -391,7 +526,7 @@ pub fn build_pool_update_body(
     let mut operator = [0u8; 28];
     operator.copy_from_slice(&pool_id_bytes);
 
-    // VRF keyhash — 32-byte hash from hex
+    // VRF keyhash: 32-byte hash from hex
     let vrf_bytes = hex::decode(input.vrf_keyhash_hex)
         .map_err(|_| TxBuildError::HashHex(input.vrf_keyhash_hex.to_string()))?;
     if vrf_bytes.len() != 32 {
@@ -403,10 +538,10 @@ pub fn build_pool_update_body(
     let mut vrf_arr = [0u8; 32];
     vrf_arr.copy_from_slice(&vrf_bytes);
 
-    // Reward account — 29 bytes (header + 28 hash) from bech32 "stake1..."
+    // Reward account: 29 bytes (header + 28 hash) from bech32 "stake1..."
     let reward_account_bytes = decode_address(input.reward_account_bech32, "stake")?;
 
-    // Pool owners — 28-byte AddrKeyhash from each "stake1..." (key only, not script)
+    // Pool owners: 28-byte AddrKeyhash from each "stake1..." (key only, not script)
     let mut pool_owners_vec: Vec<Hash<28>> =
         Vec::with_capacity(input.pool_owner_stake_addresses.len());
     for sa in input.pool_owner_stake_addresses {
@@ -419,12 +554,15 @@ pub fn build_pool_update_body(
         match stake.payload() {
             StakePayload::Stake(h) => pool_owners_vec.push(*h),
             StakePayload::Script(_) => {
-                return Err(TxBuildError::WrongHrp("stake (key)", "stake (script)".into()));
+                return Err(TxBuildError::WrongHrp(
+                    "stake (key)",
+                    "stake (script)".into(),
+                ));
             }
         }
     }
 
-    // Relays — translate user-input variants to on-chain Relay enum.
+    // Relays: translate user-input variants to on-chain Relay enum.
     // dns_name is capped at 64 bytes by the Shelley CDDL; an oversized name
     // would encode and sign fine but be rejected at submission.
     let relays: Vec<pallas_primitives::Relay> = input
@@ -444,7 +582,9 @@ pub fn build_pool_update_body(
                     Some(v) => Nullable::Some(Bytes::from(v.to_vec())),
                     None => Nullable::Null,
                 };
-                Ok(pallas_primitives::Relay::SingleHostAddr(port_n, ipv4_n, ipv6_n))
+                Ok(pallas_primitives::Relay::SingleHostAddr(
+                    port_n, ipv4_n, ipv6_n,
+                ))
             }
             RelayInput::SingleHostName { port, dns } => {
                 check_relay_dns_len(dns)?;
@@ -452,7 +592,10 @@ pub fn build_pool_update_body(
                     Some(p) => Nullable::Some(*p as u32),
                     None => Nullable::Null,
                 };
-                Ok(pallas_primitives::Relay::SingleHostName(port_n, dns.clone()))
+                Ok(pallas_primitives::Relay::SingleHostName(
+                    port_n,
+                    dns.clone(),
+                ))
             }
             RelayInput::MultiHostName { dns } => {
                 check_relay_dns_len(dns)?;
@@ -461,7 +604,7 @@ pub fn build_pool_update_body(
         })
         .collect::<Result<_, _>>()?;
 
-    // Pool metadata — Nullable<PoolMetadata>. URL and hash must be provided
+    // Pool metadata: Nullable<PoolMetadata>. URL and hash must be provided
     // together: silently dropping a partial pair would strip the pool's
     // on-chain metadata while the sign request still carries it, a mismatch
     // the signer only rejects after the full QR round-trip.
@@ -520,24 +663,26 @@ pub fn build_pool_update_body(
         .map(parse_input)
         .collect::<Result<_, _>>()?;
 
-    let change_to_payment_address_lovelace = input
-        .utxo_total_lovelace
-        .checked_sub(input.fee_lovelace)
-        .ok_or(TxBuildError::InsufficientInputs {
-            fee: input.fee_lovelace,
-            utxo_total: input.utxo_total_lovelace,
-        })?;
+    let change_to_payment_address_lovelace =
+        input
+            .utxo_total_lovelace
+            .checked_sub(fee)
+            .ok_or(TxBuildError::InsufficientInputs {
+                fee,
+                utxo_total: input.utxo_total_lovelace,
+            })?;
 
     let outputs: Vec<TransactionOutput> = vec![change_output(
         payment_addr_bytes.clone(),
         change_to_payment_address_lovelace,
         input.change_assets,
+        input.fee_params.utxo_cost_per_byte,
     )?];
 
     let body = TransactionBody {
         inputs: Set::from(inputs),
         outputs,
-        fee: input.fee_lovelace,
+        fee,
         ttl: Some(input.ttl_slot),
         certificates: Some(certificates),
         withdrawals: None,
@@ -561,6 +706,7 @@ pub fn build_pool_update_body(
     minicbor::encode(&body, &mut buf).map_err(|e| TxBuildError::Cbor(e.to_string()))?;
 
     Ok(PoolUpdateTxBody {
+        fee_lovelace: fee,
         body_cbor: buf,
         change_to_payment_address_lovelace,
     })
@@ -600,20 +746,35 @@ pub struct VoteInputs<'a> {
     pub action_index: u32,
     pub vote: VoteChoice,
     pub anchor: Option<VoteAnchorInput>,
-    pub fee_lovelace: u64,
+    /// Live fee parameters. The fee itself follows from the encoded body.
+    pub fee_params: FeeParams,
     pub ttl_slot: u64,
 }
 
 #[derive(Debug)]
 pub struct VoteTxBody {
     pub body_cbor: Vec<u8>,
+    /// The fee this body carries, computed from its own encoded size.
+    pub fee_lovelace: u64,
     pub change_to_payment_address_lovelace: u64,
 }
 
+/// Build the body with the fee its own encoded size needs: a draft at fee 0
+/// sizes the body, then the real fee is encoded. The fee field and the change
+/// grow by a few bytes at most, which the size margin in [`fee_for_body`] covers.
 pub fn build_vote_body(input: &VoteInputs) -> Result<VoteTxBody, TxBuildError> {
+    let kind = TxKind::Vote;
+    let draft = vote_body_with_fee(input, 0)?;
+    vote_body_with_fee(
+        input,
+        fee_for_body(draft.body_cbor.len(), kind.witnesses(), &input.fee_params),
+    )
+}
+
+fn vote_body_with_fee(input: &VoteInputs, fee: u64) -> Result<VoteTxBody, TxBuildError> {
     let payment_addr_bytes = decode_address(input.payment_address_bech32, "addr")?;
 
-    // Pool ID (operator / cold-key hash) — 28 bytes from "pool1..." bech32.
+    // Pool ID (operator / cold-key hash): 28 bytes from "pool1..." bech32.
     let (hrp, pool_id_bytes) = bech32::decode(input.pool_id_bech32)
         .map_err(|e| TxBuildError::Bech32(input.pool_id_bech32.to_string(), e.to_string()))?;
     if hrp.as_str() != "pool" {
@@ -628,7 +789,7 @@ pub fn build_vote_body(input: &VoteInputs) -> Result<VoteTxBody, TxBuildError> {
     let mut pool_id = [0u8; 28];
     pool_id.copy_from_slice(&pool_id_bytes);
 
-    // Governance action id — 32-byte proposal tx hash from hex + index.
+    // Governance action id: 32-byte proposal tx hash from hex + index.
     check_tx_hash_hex_len(input.action_tx_hash_hex)?;
     let action_hash_bytes = hex::decode(input.action_tx_hash_hex)
         .map_err(|_| TxBuildError::HashHex(input.action_tx_hash_hex.to_string()))?;
@@ -681,13 +842,14 @@ pub fn build_vote_body(input: &VoteInputs) -> Result<VoteTxBody, TxBuildError> {
     let voter = Voter::StakePoolKey(Hash::from(pool_id));
     let voting_procedures = NonEmptyKeyValuePairs::Def(vec![(voter, inner)]);
 
-    let change_to_payment_address_lovelace = input
-        .utxo_total_lovelace
-        .checked_sub(input.fee_lovelace)
-        .ok_or(TxBuildError::InsufficientInputs {
-            fee: input.fee_lovelace,
-            utxo_total: input.utxo_total_lovelace,
-        })?;
+    let change_to_payment_address_lovelace =
+        input
+            .utxo_total_lovelace
+            .checked_sub(fee)
+            .ok_or(TxBuildError::InsufficientInputs {
+                fee,
+                utxo_total: input.utxo_total_lovelace,
+            })?;
 
     let inputs: Vec<TransactionInput> = input
         .utxo_inputs
@@ -699,12 +861,13 @@ pub fn build_vote_body(input: &VoteInputs) -> Result<VoteTxBody, TxBuildError> {
         payment_addr_bytes.clone(),
         change_to_payment_address_lovelace,
         input.change_assets,
+        input.fee_params.utxo_cost_per_byte,
     )?];
 
     let body = TransactionBody {
         inputs: Set::from(inputs),
         outputs,
-        fee: input.fee_lovelace,
+        fee,
         ttl: Some(input.ttl_slot),
         certificates: None,
         withdrawals: None,
@@ -727,15 +890,21 @@ pub fn build_vote_body(input: &VoteInputs) -> Result<VoteTxBody, TxBuildError> {
     let mut buf = Vec::new();
     minicbor::encode(&body, &mut buf).map_err(|e| TxBuildError::Cbor(e.to_string()))?;
     Ok(VoteTxBody {
+        fee_lovelace: fee,
         body_cbor: buf,
         change_to_payment_address_lovelace,
     })
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const PARAMS: FeeParams = FeeParams {
+        min_fee_a: 44,
+        min_fee_b: 155_381,
+        utxo_cost_per_byte: 4_310,
+    };
 
     #[test]
     fn builds_a_withdrawal_body_that_round_trips() {
@@ -753,18 +922,21 @@ mod tests {
             pool_reward_address_bech32:
                 "stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq28lj8u",
             rewards_lovelace: 1_000_000_000,
-            fee_lovelace: 200_000,
+            fee_params: PARAMS,
             ttl_slot: 2_000_000,
         };
         let out = build_withdrawal_body(&input).unwrap();
         assert!(!out.body_cbor.is_empty());
         assert_eq!(out.net_to_reward_address_lovelace, 1_000_000_000);
-        assert_eq!(out.change_to_payment_address_lovelace, 33_909_103);
+        assert_eq!(
+            out.change_to_payment_address_lovelace,
+            34_109_103 - out.fee_lovelace
+        );
         // Sanity: decode back.
         let decoded: TransactionBody = minicbor::decode(&out.body_cbor).unwrap();
         assert_eq!(decoded.inputs.len(), 1);
         assert_eq!(decoded.outputs.len(), 2);
-        assert_eq!(decoded.fee, 200_000);
+        assert_eq!(decoded.fee, out.fee_lovelace);
         assert_eq!(decoded.ttl, Some(2_000_000));
         assert!(decoded.withdrawals.is_some());
     }
@@ -785,13 +957,19 @@ mod tests {
             pool_reward_address_bech32:
                 "stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq28lj8u",
             rewards_lovelace: 1_000_000_000,
-            fee_lovelace: 200_000,
+            fee_params: PARAMS,
             ttl_slot: 2_000_000,
         };
         let built = build_withdrawal_body(&input).unwrap();
         let witnesses = vec![
-            RawVkeyWitness { vkey: vec![0u8; 32], signature: vec![0u8; 64] },
-            RawVkeyWitness { vkey: vec![1u8; 32], signature: vec![1u8; 64] },
+            RawVkeyWitness {
+                vkey: vec![0u8; 32],
+                signature: vec![0u8; 64],
+            },
+            RawVkeyWitness {
+                vkey: vec![1u8; 32],
+                signature: vec![1u8; 64],
+            },
         ];
         let signed = assemble_signed_tx(&built.body_cbor, &witnesses).unwrap();
         // Signed tx must start with array(4) header.
@@ -801,7 +979,9 @@ mod tests {
         assert_eq!(signed[signed.len() - 1], 0xf6);
         // Signed tx must contain the body bytes verbatim.
         assert!(
-            signed.windows(built.body_cbor.len()).any(|w| w == built.body_cbor),
+            signed
+                .windows(built.body_cbor.len())
+                .any(|w| w == built.body_cbor),
             "body bytes should appear verbatim in signed tx"
         );
         // Round-trip via Pallas.
@@ -812,8 +992,8 @@ mod tests {
     fn builds_drep_delegation_body_to_abstain() {
         let input = DRepDelegationInputs {
             utxo_inputs: &[TxInput {
-                tx_hash_hex:
-                    "0000000000000000000000000000000000000000000000000000000000000000".into(),
+                tx_hash_hex: "0000000000000000000000000000000000000000000000000000000000000000"
+                    .into(),
                 tx_index: 0,
             }],
             utxo_total_lovelace: 34_109_103,
@@ -821,17 +1001,20 @@ mod tests {
             payment_address_bech32: "addr1vyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqkdl5mw",
             stake_credential_bech32: "stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq28lj8u",
             drep_choice: DRepChoice::Abstain,
-            fee_lovelace: 200_000,
+            fee_params: PARAMS,
             ttl_slot: 2_000_000,
         };
         let out = build_drep_delegation_body(&input).unwrap();
         assert!(!out.body_cbor.is_empty());
-        assert_eq!(out.change_to_payment_address_lovelace, 33_909_103);
+        assert_eq!(
+            out.change_to_payment_address_lovelace,
+            34_109_103 - out.fee_lovelace
+        );
 
         let decoded: TransactionBody = minicbor::decode(&out.body_cbor).unwrap();
         assert_eq!(decoded.inputs.len(), 1);
         assert_eq!(decoded.outputs.len(), 1);
-        assert_eq!(decoded.fee, 200_000);
+        assert_eq!(decoded.fee, out.fee_lovelace);
         assert!(decoded.certificates.is_some());
         assert!(decoded.withdrawals.is_none());
     }
@@ -839,37 +1022,40 @@ mod tests {
     #[test]
     fn builds_vote_body_yes_no_anchor() {
         let pool_hrp = bech32::Hrp::parse("pool").unwrap();
-        let pool_id_bech32 =
-            bech32::encode::<bech32::Bech32>(pool_hrp, &[11u8; 28]).unwrap();
+        let pool_id_bech32 = bech32::encode::<bech32::Bech32>(pool_hrp, &[11u8; 28]).unwrap();
         let input = VoteInputs {
             utxo_inputs: &[TxInput {
-                tx_hash_hex:
-                    "0000000000000000000000000000000000000000000000000000000000000000".into(),
+                tx_hash_hex: "0000000000000000000000000000000000000000000000000000000000000000"
+                    .into(),
                 tx_index: 0,
             }],
             utxo_total_lovelace: 34_109_103,
             change_assets: &[],
             payment_address_bech32: "addr1vyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqkdl5mw",
             pool_id_bech32: &pool_id_bech32,
-            action_tx_hash_hex:
-                "fdd468da5cc4ac8431dcd7e2b3211666c73bc229f85879469f67f1d9d51d344d",
+            action_tx_hash_hex: "fdd468da5cc4ac8431dcd7e2b3211666c73bc229f85879469f67f1d9d51d344d",
             action_index: 0,
             vote: VoteChoice::Yes,
             anchor: None,
-            fee_lovelace: 200_000,
+            fee_params: PARAMS,
             ttl_slot: 2_000_000,
         };
         let out = build_vote_body(&input).unwrap();
         assert!(!out.body_cbor.is_empty());
-        assert_eq!(out.change_to_payment_address_lovelace, 33_909_103);
+        assert_eq!(
+            out.change_to_payment_address_lovelace,
+            34_109_103 - out.fee_lovelace
+        );
 
         let decoded: TransactionBody = minicbor::decode(&out.body_cbor).unwrap();
         assert_eq!(decoded.inputs.len(), 1);
         assert_eq!(decoded.outputs.len(), 1);
-        assert_eq!(decoded.fee, 200_000);
+        assert_eq!(decoded.fee, out.fee_lovelace);
         assert!(decoded.certificates.is_none());
         assert!(decoded.withdrawals.is_none());
-        let vps = decoded.voting_procedures.expect("voting_procedures present");
+        let vps = decoded
+            .voting_procedures
+            .expect("voting_procedures present");
         assert_eq!(vps.len(), 1);
     }
 
@@ -879,13 +1065,12 @@ mod tests {
             utxo_inputs: &[],
             utxo_total_lovelace: 0,
             change_assets: &[],
-            payment_address_bech32:
-                "stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq28lj8u",
+            payment_address_bech32: "stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq28lj8u",
             reward_receive_address_bech32: "addr1q...",
             pool_reward_address_bech32:
                 "stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq28lj8u",
             rewards_lovelace: 0,
-            fee_lovelace: 0,
+            fee_params: PARAMS,
             ttl_slot: 0,
         };
         let err = build_withdrawal_body(&input).unwrap_err();
@@ -901,8 +1086,8 @@ mod tests {
         }];
         let with_a = build_drep_delegation_body(&DRepDelegationInputs {
             utxo_inputs: &[TxInput {
-                tx_hash_hex:
-                    "0000000000000000000000000000000000000000000000000000000000000000".into(),
+                tx_hash_hex: "0000000000000000000000000000000000000000000000000000000000000000"
+                    .into(),
                 tx_index: 0,
             }],
             utxo_total_lovelace: 34_109_103,
@@ -910,13 +1095,14 @@ mod tests {
             payment_address_bech32: "addr1vyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqkdl5mw",
             stake_credential_bech32: "stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq28lj8u",
             drep_choice: DRepChoice::Abstain,
-            fee_lovelace: 200_000,
+            fee_params: PARAMS,
             ttl_slot: 2_000_000,
-        }).unwrap();
+        })
+        .unwrap();
         let without = build_drep_delegation_body(&DRepDelegationInputs {
             utxo_inputs: &[TxInput {
-                tx_hash_hex:
-                    "0000000000000000000000000000000000000000000000000000000000000000".into(),
+                tx_hash_hex: "0000000000000000000000000000000000000000000000000000000000000000"
+                    .into(),
                 tx_index: 0,
             }],
             utxo_total_lovelace: 34_109_103,
@@ -924,9 +1110,10 @@ mod tests {
             payment_address_bech32: "addr1vyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqkdl5mw",
             stake_credential_bech32: "stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq28lj8u",
             drep_choice: DRepChoice::Abstain,
-            fee_lovelace: 200_000,
+            fee_params: PARAMS,
             ttl_slot: 2_000_000,
-        }).unwrap();
+        })
+        .unwrap();
         assert!(with_a.body_cbor.len() > without.body_cbor.len());
     }
 
@@ -937,11 +1124,12 @@ mod tests {
             asset_name_hex: "4e49474854".into(),
             quantity: 42,
         }];
-        // change = total - fee = 1 lovelace, far below an asset output's min-ADA.
+        // change = total - fee is a few tens of thousands of lovelace, far below
+        // an asset output's min-ADA.
         let mut bad = DRepDelegationInputs {
             utxo_inputs: &[TxInput {
-                tx_hash_hex:
-                    "0000000000000000000000000000000000000000000000000000000000000000".into(),
+                tx_hash_hex: "0000000000000000000000000000000000000000000000000000000000000000"
+                    .into(),
                 tx_index: 0,
             }],
             utxo_total_lovelace: 34_109_103,
@@ -949,10 +1137,10 @@ mod tests {
             payment_address_bech32: "addr1vyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqkdl5mw",
             stake_credential_bech32: "stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq28lj8u",
             drep_choice: DRepChoice::Abstain,
-            fee_lovelace: 200_000,
+            fee_params: PARAMS,
             ttl_slot: 2_000_000,
         };
-        bad.utxo_total_lovelace = bad.fee_lovelace + 1;
+        bad.utxo_total_lovelace = 200_001;
         assert!(build_drep_delegation_body(&bad).is_err());
     }
 
@@ -978,7 +1166,7 @@ mod tests {
             pool_reward_address_bech32:
                 "stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq28lj8u",
             rewards_lovelace: 1_000_000_000,
-            fee_lovelace: 200_000,
+            fee_params: PARAMS,
             ttl_slot: 2_000_000,
         }).unwrap();
         let without = build_withdrawal_body(&WithdrawalInputs {
@@ -995,7 +1183,7 @@ mod tests {
             pool_reward_address_bech32:
                 "stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq28lj8u",
             rewards_lovelace: 1_000_000_000,
-            fee_lovelace: 200_000,
+            fee_params: PARAMS,
             ttl_slot: 2_000_000,
         }).unwrap();
         assert!(with_a.body_cbor.len() > without.body_cbor.len());
@@ -1004,12 +1192,12 @@ mod tests {
     #[test]
     fn coin_only_change_below_min_ada_is_rejected() {
         // 0.5 ADA of change after the fee passes the fee arithmetic but is
-        // below the ~0.86 ADA min-UTxO for a coin-only output — must fail at
+        // below the ~0.86 ADA min-UTxO for a coin-only output: must fail at
         // build time, not at the node after the signing ceremony.
         let err = build_drep_delegation_body(&DRepDelegationInputs {
             utxo_inputs: &[TxInput {
-                tx_hash_hex:
-                    "0000000000000000000000000000000000000000000000000000000000000000".into(),
+                tx_hash_hex: "0000000000000000000000000000000000000000000000000000000000000000"
+                    .into(),
                 tx_index: 0,
             }],
             utxo_total_lovelace: 700_000,
@@ -1017,7 +1205,7 @@ mod tests {
             payment_address_bech32: "addr1vyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqkdl5mw",
             stake_credential_bech32: "stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq28lj8u",
             drep_choice: DRepChoice::Abstain,
-            fee_lovelace: 200_000,
+            fee_params: PARAMS,
             ttl_slot: 2_000_000,
         })
         .unwrap_err();
@@ -1043,7 +1231,7 @@ mod tests {
             pool_reward_address_bech32:
                 "stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq28lj8u",
             rewards_lovelace: 500_000,
-            fee_lovelace: 200_000,
+            fee_params: PARAMS,
             ttl_slot: 2_000_000,
         })
         .unwrap_err();
@@ -1066,8 +1254,7 @@ mod tests {
 
     fn test_utxo() -> Vec<TxInput> {
         vec![TxInput {
-            tx_hash_hex: "0000000000000000000000000000000000000000000000000000000000000000"
-                .into(),
+            tx_hash_hex: "0000000000000000000000000000000000000000000000000000000000000000".into(),
             tx_index: 0,
         }]
     }
@@ -1096,7 +1283,7 @@ mod tests {
             relays,
             metadata_url,
             metadata_hash_hex,
-            fee_lovelace: 250_000,
+            fee_params: PARAMS,
             ttl_slot: 2_000_000,
         }
     }
@@ -1117,9 +1304,15 @@ mod tests {
         .unwrap();
         let decoded: TransactionBody = minicbor::decode(&with.body_cbor).unwrap();
         assert!(decoded.certificates.is_some());
-        let without =
-            build_pool_update_body(&pool_update_inputs(&utxo, &pool_id, &owners, &[], None, None))
-                .unwrap();
+        let without = build_pool_update_body(&pool_update_inputs(
+            &utxo,
+            &pool_id,
+            &owners,
+            &[],
+            None,
+            None,
+        ))
+        .unwrap();
         assert!(with.body_cbor.len() > without.body_cbor.len());
     }
 
@@ -1156,7 +1349,7 @@ mod tests {
         let pool_id = test_pool_id();
         let owners = [STAKE.to_string()];
         let utxo = test_utxo();
-        // 64 bytes is the CDDL maximum — accepted.
+        // 64 bytes is the CDDL maximum: accepted.
         let url_64 = "a".repeat(64);
         assert!(build_pool_update_body(&pool_update_inputs(
             &utxo,
@@ -1167,7 +1360,7 @@ mod tests {
             Some(META_HASH),
         ))
         .is_ok());
-        // 65 bytes — rejected at build time, before the signing ceremony.
+        // 65 bytes: rejected at build time, before the signing ceremony.
         let url_65 = "a".repeat(65);
         assert!(build_pool_update_body(&pool_update_inputs(
             &utxo,
@@ -1185,16 +1378,22 @@ mod tests {
         let pool_id = test_pool_id();
         let owners = [STAKE.to_string()];
         let utxo = test_utxo();
-        // 64-byte dns_name is the CDDL maximum — accepted.
+        // 64-byte dns_name is the CDDL maximum: accepted.
         let dns_64 = "a".repeat(64);
-        let ok_relay = [RelayInput::SingleHostName { port: Some(3001), dns: dns_64 }];
+        let ok_relay = [RelayInput::SingleHostName {
+            port: Some(3001),
+            dns: dns_64,
+        }];
         assert!(build_pool_update_body(&pool_update_inputs(
             &utxo, &pool_id, &owners, &ok_relay, None, None,
         ))
         .is_ok());
-        // Over 64 bytes — rejected for both DNS relay kinds.
+        // Over 64 bytes: rejected for both DNS relay kinds.
         let long_dns = "a".repeat(65);
-        let single = [RelayInput::SingleHostName { port: Some(3001), dns: long_dns.clone() }];
+        let single = [RelayInput::SingleHostName {
+            port: Some(3001),
+            dns: long_dns.clone(),
+        }];
         assert!(build_pool_update_body(&pool_update_inputs(
             &utxo, &pool_id, &owners, &single, None, None,
         ))
@@ -1216,17 +1415,19 @@ mod tests {
             change_assets: &[],
             payment_address_bech32: PAYMENT,
             pool_id_bech32: &pool_id_bech32,
-            action_tx_hash_hex:
-                "fdd468da5cc4ac8431dcd7e2b3211666c73bc229f85879469f67f1d9d51d344d",
+            action_tx_hash_hex: "fdd468da5cc4ac8431dcd7e2b3211666c73bc229f85879469f67f1d9d51d344d",
             action_index: 0,
             vote: VoteChoice::Yes,
-            anchor: Some(VoteAnchorInput { url, hash_hex: META_HASH.into() }),
-            fee_lovelace: 200_000,
+            anchor: Some(VoteAnchorInput {
+                url,
+                hash_hex: META_HASH.into(),
+            }),
+            fee_params: PARAMS,
             ttl_slot: 2_000_000,
         };
-        // 128 bytes is the Conway maximum — accepted.
+        // 128 bytes is the Conway maximum: accepted.
         assert!(build_vote_body(&vote_inputs("a".repeat(128))).is_ok());
-        // 129 bytes — rejected at build time.
+        // 129 bytes: rejected at build time.
         let err = build_vote_body(&vote_inputs("a".repeat(129))).unwrap_err();
         // ... and classified as operator input, so the handler surfaces
         // the actionable message as invalid_input.
@@ -1241,7 +1442,9 @@ mod tests {
         let utxo = test_utxo();
         // Oversized relay DNS name -> classified: the handler maps it to
         // ErrorEnvelope::invalid with the specific message.
-        let long_dns = [RelayInput::MultiHostName { dns: "a".repeat(65) }];
+        let long_dns = [RelayInput::MultiHostName {
+            dns: "a".repeat(65),
+        }];
         let err = build_pool_update_body(&pool_update_inputs(
             &utxo, &pool_id, &owners, &long_dns, None, None,
         ))
@@ -1251,16 +1454,88 @@ mod tests {
         // Oversized metadata URL -> classified too.
         let long_url = "a".repeat(65);
         let err = build_pool_update_body(&pool_update_inputs(
-            &utxo, &pool_id, &owners, &[], Some(&long_url), Some(META_HASH),
+            &utxo,
+            &pool_id,
+            &owners,
+            &[],
+            Some(&long_url),
+            Some(META_HASH),
         ))
         .unwrap_err();
         assert!(cddl_len_violation(&err).is_some());
         // A different Cbor-variant build error (partial metadata pair)
-        // must NOT classify — it stays an internal envelope.
+        // must NOT classify: it stays an internal envelope.
         let err = build_pool_update_body(&pool_update_inputs(
-            &utxo, &pool_id, &owners, &[], Some("https://example.com/pool.json"), None,
+            &utxo,
+            &pool_id,
+            &owners,
+            &[],
+            Some("https://example.com/pool.json"),
+            None,
         ))
         .unwrap_err();
         assert!(cddl_len_violation(&err).is_none());
+    }
+
+    #[test]
+    fn every_body_carries_the_fee_its_own_size_needs() {
+        let utxo = test_utxo();
+        let pool_id = test_pool_id();
+        let owners = [STAKE.to_string()];
+        let relays: Vec<RelayInput> = (0..30)
+            .map(|i| RelayInput::SingleHostName {
+                port: Some(3001),
+                dns: format!("relay-{i:02}.a-rather-long-operator-domain-name.example.org"),
+            })
+            .collect();
+        let few = build_pool_update_body(&pool_update_inputs(
+            &utxo,
+            &pool_id,
+            &owners,
+            &[],
+            None,
+            None,
+        ))
+        .unwrap();
+        let many = build_pool_update_body(&pool_update_inputs(
+            &utxo, &pool_id, &owners, &relays, None, None,
+        ))
+        .unwrap();
+        for out in [&few, &many] {
+            let decoded: TransactionBody = minicbor::decode(&out.body_cbor).unwrap();
+            assert_eq!(decoded.fee, out.fee_lovelace);
+            // The signed transaction: array header, body, a witness map holding
+            // three vkey witnesses of 101 bytes each, the validity flag and null
+            // auxiliary data. The fee must cover that exact size.
+            let signed = out.body_cbor.len() as u64 + 1 + 3 + 3 * 101 + 2;
+            assert!(out.fee_lovelace >= PARAMS.min_fee_a * signed + PARAMS.min_fee_b);
+        }
+        // A long relay list is exactly where the old flat 250,000 fell short.
+        assert!(many.fee_lovelace > 250_000, "{}", many.fee_lovelace);
+        assert!(
+            preview_fee_lovelace(
+                TxKind::PoolUpdate {
+                    relays: relays.len()
+                },
+                1,
+                0,
+                &PARAMS
+            ) >= many.fee_lovelace
+        );
+    }
+
+    #[test]
+    fn the_fee_follows_the_live_parameters() {
+        let utxo = test_utxo();
+        let pool_id = test_pool_id();
+        let owners = [STAKE.to_string()];
+        let mut input = pool_update_inputs(&utxo, &pool_id, &owners, &[], None, None);
+        let now = build_pool_update_body(&input).unwrap().fee_lovelace;
+        input.fee_params = FeeParams {
+            min_fee_a: 50,
+            min_fee_b: 200_000,
+            ..PARAMS
+        };
+        assert!(build_pool_update_body(&input).unwrap().fee_lovelace > now);
     }
 }

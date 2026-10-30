@@ -1,9 +1,9 @@
-# SPO Tools — Cardano Stake Pool Operator management toolkit.
+# SPO Tools: Cardano Stake Pool Operator management toolkit.
 #
 # Workspace contains three crates:
-#   shared      — types, traits, and helpers used by both backend and signer
-#   online-tool — internet-connected web app (Axum + Pallas, watch + submit)
-#   signer      — air-gapped signing application (Pallas, no network)
+#   shared:      types, traits, and helpers used by both backend and signer
+#   online-tool: internet-connected web app (Axum + Pallas, watch + submit)
+#   signer:      air-gapped signing application (Pallas, no network)
 #
 # Both binaries compile to standalone executables, distributed as single files.
 
@@ -13,7 +13,7 @@ members = ["shared", "online-tool", "signer"]
 
 [workspace.package]
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 authors = ["Smit Blockchain Operations (Pool BKIND) <developmentbkind@gmail.com>"]
 
@@ -32,14 +32,14 @@ axum = "0.8"
 # HTTP client for talking to Koios. rustls-tls so we do not pull in OpenSSL.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
-# Pallas — Cardano native Rust building blocks.
+# Pallas: Cardano native Rust building blocks.
 pallas-primitives = "0.35"
 pallas-codec      = "0.35"
 pallas-crypto     = "0.35"
 pallas-addresses  = "0.35"
 pallas-math       = "0.35"
 
-# Uniform Resources — bytes <-> UR strings, the wire format we send across QR.
+# Uniform Resources: bytes <-> UR strings, the wire format we send across QR.
 # UR is a Blockchain Commons standard; multi-part / fountain encoding gives
 # robustness against missed frames in animated QR transmission.
 ur = "0.4"

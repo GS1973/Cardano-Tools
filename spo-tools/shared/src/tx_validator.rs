@@ -20,7 +20,7 @@ use pallas_primitives::Relay;
 // Role-neutral validation primitives, shared with DREP Tools via airgap-core.
 pub use crate::validate::ValidationError;
 use crate::validate::{
-    addr_bytes, anchor_matches_parts, assert_inputs_bind_to_request,
+    addr_bytes, anchor_matches_parts, assert_fee_within_ceiling, assert_inputs_bind_to_request,
     assert_no_extra_fields_inner, blake2b224, decode_body, output_pair,
     stake_credential_from_bech32,
 };
@@ -29,7 +29,6 @@ use crate::drep::{DRepChoice, DRepDelegationRequest};
 use crate::pool_update::{PoolUpdateRequest, RelaySpec};
 use crate::vote::{VoteAnchor, VoteChoice, VoteRequest};
 use crate::withdrawal::WithdrawalRequest;
-
 
 /// Reject every Conway TransactionBody field that no SPO-tools operation
 /// uses. An attacker controlling the online-tool's body construction
@@ -41,11 +40,9 @@ fn assert_no_extra_fields(body: &TransactionBody) -> Result<(), ValidationError>
     assert_no_extra_fields_inner(body, false, false)
 }
 
-
 // ---------------------------------------------------------------------------
 // Withdrawal
 // ---------------------------------------------------------------------------
-
 
 /// Verify a `WithdrawalRequest`'s body claims exactly the operation the
 /// request describes: rewards are drawn from the pool's reward account,
@@ -62,6 +59,7 @@ pub fn validate_withdrawal_body(
     if body.fee != req.fee_lovelace {
         return Err(ValidationError::Mismatch("fee"));
     }
+    assert_fee_within_ceiling(req.fee_lovelace)?;
     if body.ttl != Some(req.ttl_slot) {
         return Err(ValidationError::Mismatch("ttl"));
     }
@@ -72,7 +70,7 @@ pub fn validate_withdrawal_body(
         return Err(ValidationError::Mismatch("unexpected certificates"));
     }
 
-    // Outputs: exactly two — one to reward_receive_addr (net amount),
+    // Outputs: exactly two, one to reward_receive_addr (net amount),
     // one to payment_addr (change). Matched by address membership so the
     // build order is not pinned. When the operator withdraws into the same
     // wallet that funds the fee (reward_receive == payment), the builder
@@ -87,7 +85,7 @@ pub fn validate_withdrawal_body(
     if payment_b == reward_recv_b {
         // Single-wallet withdrawal: both outputs go to the one approved
         // address. Validate them as an unordered pair whose amounts are
-        // exactly {change, net} — every lovelace still lands at the
+        // exactly {change, net}: every lovelace still lands at the
         // approved address and the split is pinned.
         let mut coins = Vec::with_capacity(body.outputs.len());
         for o in &body.outputs {
@@ -114,7 +112,9 @@ pub fn validate_withdrawal_body(
             let (addr, coin) = output_pair(o)?;
             if addr == payment_b.as_slice() {
                 if saw_payment {
-                    return Err(ValidationError::Mismatch("duplicate payment-address output"));
+                    return Err(ValidationError::Mismatch(
+                        "duplicate payment-address output",
+                    ));
                 }
                 if coin != req.change_to_payment_address_lovelace {
                     return Err(ValidationError::Mismatch("payment-address output amount"));
@@ -162,7 +162,6 @@ pub fn validate_withdrawal_body(
 // DRep delegation
 // ---------------------------------------------------------------------------
 
-
 fn drep_choice_matches_drep(choice: &DRepChoice, drep: &DRep) -> Result<bool, ValidationError> {
     Ok(match (choice, drep) {
         (DRepChoice::Abstain, DRep::Abstain) => true,
@@ -196,6 +195,7 @@ pub fn validate_drep_body(
     if body.fee != req.fee_lovelace {
         return Err(ValidationError::Mismatch("fee"));
     }
+    assert_fee_within_ceiling(req.fee_lovelace)?;
     if body.ttl != Some(req.ttl_slot) {
         return Err(ValidationError::Mismatch("ttl"));
     }
@@ -206,7 +206,7 @@ pub fn validate_drep_body(
         return Err(ValidationError::Mismatch("unexpected withdrawals"));
     }
 
-    // Single output — change to payment address.
+    // Single output: change to payment address.
     if body.outputs.len() != 1 {
         return Err(ValidationError::Mismatch("output count"));
     }
@@ -248,10 +248,7 @@ pub fn validate_drep_body(
 
 fn relay_spec_matches(spec: &RelaySpec, on_chain: &Relay) -> bool {
     match (spec, on_chain) {
-        (
-            RelaySpec::SingleHostAddr { port, ipv4, ipv6 },
-            Relay::SingleHostAddr(p, v4, v6),
-        ) => {
+        (RelaySpec::SingleHostAddr { port, ipv4, ipv6 }, Relay::SingleHostAddr(p, v4, v6)) => {
             let port_ok = match (port, p) {
                 (Some(a), Nullable::Some(b)) => *a as u32 == *b,
                 (None, Nullable::Null) => true,
@@ -310,6 +307,7 @@ pub fn validate_pool_update_body(
     if body.fee != req.fee_lovelace {
         return Err(ValidationError::Mismatch("fee"));
     }
+    assert_fee_within_ceiling(req.fee_lovelace)?;
     if body.ttl != Some(req.ttl_slot) {
         return Err(ValidationError::Mismatch("ttl"));
     }
@@ -341,26 +339,48 @@ pub fn validate_pool_update_body(
     if certs.len() != 1 {
         return Err(ValidationError::Mismatch("certificate count"));
     }
-    let (operator, vrf_keyhash, pledge, cost, margin, reward_account, pool_owners, relays, pool_metadata) =
-        match &certs[0] {
-            Certificate::PoolRegistration {
-                operator,
-                vrf_keyhash,
-                pledge,
-                cost,
-                margin,
-                reward_account,
-                pool_owners,
-                relays,
-                pool_metadata,
-            } => (operator, vrf_keyhash, *pledge, *cost, margin, reward_account, pool_owners, relays, pool_metadata),
-            _ => return Err(ValidationError::Mismatch("not a PoolRegistration certificate")),
-        };
+    let (
+        operator,
+        vrf_keyhash,
+        pledge,
+        cost,
+        margin,
+        reward_account,
+        pool_owners,
+        relays,
+        pool_metadata,
+    ) = match &certs[0] {
+        Certificate::PoolRegistration {
+            operator,
+            vrf_keyhash,
+            pledge,
+            cost,
+            margin,
+            reward_account,
+            pool_owners,
+            relays,
+            pool_metadata,
+        } => (
+            operator,
+            vrf_keyhash,
+            *pledge,
+            *cost,
+            margin,
+            reward_account,
+            pool_owners,
+            relays,
+            pool_metadata,
+        ),
+        _ => {
+            return Err(ValidationError::Mismatch(
+                "not a PoolRegistration certificate",
+            ))
+        }
+    };
 
-    // Operator (pool ID) — 28 bytes from "pool1..." bech32.
-    let (hrp, pool_id_bytes) = bech32::decode(&req.pool_id_bech32).map_err(|e| {
-        ValidationError::BadAddress(req.pool_id_bech32.clone(), e.to_string())
-    })?;
+    // Operator (pool ID): 28 bytes from "pool1..." bech32.
+    let (hrp, pool_id_bytes) = bech32::decode(&req.pool_id_bech32)
+        .map_err(|e| ValidationError::BadAddress(req.pool_id_bech32.clone(), e.to_string()))?;
     if hrp.as_str() != "pool" {
         return Err(ValidationError::Mismatch("pool ID is not pool1... bech32"));
     }
@@ -368,7 +388,7 @@ pub fn validate_pool_update_body(
         return Err(ValidationError::Mismatch("pool operator hash"));
     }
 
-    // VRF keyhash — 32-byte hex.
+    // VRF keyhash: 32-byte hex.
     let vrf_bytes = hex::decode(&req.vrf_keyhash_hex)
         .map_err(|e| ValidationError::BadHex(req.vrf_keyhash_hex.clone(), e.to_string()))?;
     if vrf_bytes.len() != 32 || vrf_bytes.as_slice() != vrf_keyhash.as_ref() {
@@ -385,20 +405,24 @@ pub fn validate_pool_update_body(
         return Err(ValidationError::Mismatch("margin"));
     }
 
-    // Reward account — 29 bytes from "stake1..." bech32 (header + 28 hash).
+    // Reward account: 29 bytes from "stake1..." bech32 (header + 28 hash).
     let reward_acct_b = addr_bytes(&req.reward_account_bech32)?;
     if reward_account.as_slice() != reward_acct_b.as_slice() {
         return Err(ValidationError::Mismatch("reward account"));
     }
 
-    // Pool owners — Set<Hash<28>> compared as sorted byte arrays.
+    // Pool owners: Set<Hash<28>> compared as sorted byte arrays.
     let mut req_owners: Vec<[u8; 28]> = Vec::with_capacity(req.pool_owner_stake_addresses.len());
     for sa in &req.pool_owner_stake_addresses {
         let parsed = Address::from_bech32(sa)
             .map_err(|e| ValidationError::BadAddress(sa.clone(), e.to_string()))?;
         let stake = match parsed {
             Address::Stake(s) => s,
-            _ => return Err(ValidationError::Mismatch("pool owner is not a stake address")),
+            _ => {
+                return Err(ValidationError::Mismatch(
+                    "pool owner is not a stake address",
+                ))
+            }
         };
         match stake.payload() {
             StakePayload::Stake(h) => {
@@ -425,7 +449,7 @@ pub fn validate_pool_update_body(
         return Err(ValidationError::Mismatch("pool owners"));
     }
 
-    // Relays — compared positionally (tx_builder preserves request order
+    // Relays: compared positionally (tx_builder preserves request order
     // and the wire is order-significant).
     if relays.len() != req.relays.len() {
         return Err(ValidationError::Mismatch("relay count"));
@@ -436,8 +460,12 @@ pub fn validate_pool_update_body(
         }
     }
 
-    // Metadata — both-Null or both-Some-and-equal.
-    match (pool_metadata, req.metadata_url.as_deref(), req.metadata_hash_hex.as_deref()) {
+    // Metadata: both-Null or both-Some-and-equal.
+    match (
+        pool_metadata,
+        req.metadata_url.as_deref(),
+        req.metadata_hash_hex.as_deref(),
+    ) {
         (Nullable::Null, None, None) => {}
         (Nullable::Some(meta), Some(url), Some(hash_hex)) => {
             if meta.url != url {
@@ -459,9 +487,8 @@ pub fn validate_pool_update_body(
 // SPO governance vote
 // ---------------------------------------------------------------------------
 
-
-/// Verify a `VoteRequest`'s body. Exactly one voter — a `StakePoolKey`
-/// whose 28-byte hash equals the request's pool id — casts exactly one
+/// Verify a `VoteRequest`'s body. Exactly one voter, a `StakePoolKey`
+/// whose 28-byte hash equals the request's pool id, casts exactly one
 /// vote on the requested governance action id, with the requested vote
 /// and rationale anchor; one change output to the payment address; no
 /// certificates or withdrawals; fee and TTL match.
@@ -479,6 +506,7 @@ pub fn validate_vote_body(body_bytes: &[u8], req: &VoteRequest) -> Result<(), Va
     if body.fee != req.fee_lovelace {
         return Err(ValidationError::Mismatch("fee"));
     }
+    assert_fee_within_ceiling(req.fee_lovelace)?;
     if body.ttl != Some(req.ttl_slot) {
         return Err(ValidationError::Mismatch("ttl"));
     }
@@ -563,9 +591,8 @@ pub fn validate_vote_body(body_bytes: &[u8], req: &VoteRequest) -> Result<(), Va
 }
 
 // ---------------------------------------------------------------------------
-// Tests
+// Shared helpers
 // ---------------------------------------------------------------------------
-
 
 /// Compare the request's optional rationale anchor to the on-chain
 /// `Nullable<Anchor>` via the shared role-neutral comparator.
@@ -587,7 +614,7 @@ fn anchor_matches(
 /// derivation) and checks it equals the request pool id. Without this a
 /// compromised online tool could craft a body voting as some pool id and
 /// label the request with that same id; the signer would bind body to
-/// request and sign — but the cold key would not actually authorise that
+/// request and sign, but the cold key would not actually authorise that
 /// pool's vote on-chain. Checking here makes the signer refuse before the
 /// cold key ever touches the body.
 pub fn assert_cold_vkey_matches_pool(
@@ -606,17 +633,70 @@ pub fn assert_cold_vkey_matches_pool(
     Ok(())
 }
 
+/// Companion to [`assert_cold_vkey_matches_pool`] for the stake keys. The
+/// validators prove the body acts on the stake address named in the request
+/// (the reward account a withdrawal empties, the credential a DRep
+/// delegation delegates); this proves that address belongs to the stake key
+/// that signs, by hashing the loaded verification key (blake2b-224) and
+/// comparing it with the address's key credential. A transaction over
+/// someone else's stake address would be rejected by the network for lack
+/// of their witness, so no funds or voting rights are at stake; the check
+/// makes the signer refuse such a request itself, so the stake address the
+/// operator reads on the preview is one this signer actually controls.
+pub fn assert_stake_vkey_matches_address(
+    stake_address_bech32: &str,
+    stake_vkey: &[u8; 32],
+) -> Result<(), ValidationError> {
+    match stake_credential_from_bech32(stake_address_bech32)? {
+        pallas_primitives::StakeCredential::AddrKeyhash(h)
+            if h.as_ref() == blake2b224(stake_vkey) =>
+        {
+            Ok(())
+        }
+        pallas_primitives::StakeCredential::AddrKeyhash(_) => Err(ValidationError::Mismatch(
+            "stake key does not match the stake address",
+        )),
+        pallas_primitives::StakeCredential::ScriptHash(_) => Err(ValidationError::Mismatch(
+            "stake address is script-controlled",
+        )),
+    }
+}
+
+/// The pool-update counterpart of [`assert_stake_vkey_matches_address`]:
+/// the owner key that signs a pool update must be one of the owners the
+/// request (and so the body) names. Otherwise the update would drop this
+/// signer's owner from the pool, and the pledge it backs would stop
+/// counting.
+pub fn assert_owner_vkey_is_pool_owner(
+    owner_stake_addresses: &[String],
+    owner_vkey: &[u8; 32],
+) -> Result<(), ValidationError> {
+    let own = blake2b224(owner_vkey);
+    for sa in owner_stake_addresses {
+        if let pallas_primitives::StakeCredential::AddrKeyhash(h) =
+            stake_credential_from_bech32(sa)?
+        {
+            if h.as_ref() == own {
+                return Ok(());
+            }
+        }
+    }
+    Err(ValidationError::Mismatch(
+        "the owner key on this signer is not one of the pool owners",
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utxo::UtxoInput;
-    use pallas_codec::minicbor;
     use crate::chain_context::ChainContext;
     use crate::drep::DRepChoice;
+    use crate::pool_update::RelaySpec;
+    use crate::utxo::UtxoInput;
     use crate::vote::{VoteAnchor, VoteChoice, VoteRequest};
     use crate::wire_kind::WireKind;
-    use crate::pool_update::RelaySpec;
-    
+    use pallas_codec::minicbor;
+
     use pallas_codec::utils::{Bytes, NonEmptyKeyValuePairs, NonEmptySet, Nullable, Set};
     use pallas_primitives::conway::{
         Anchor, Certificate, DRep, GovActionId, PseudoTransactionOutput, TransactionBody,
@@ -624,14 +704,11 @@ mod tests {
     };
     use pallas_primitives::{Hash, NetworkId, RationalNumber, StakeCredential, TransactionInput};
 
-    const PAYMENT_ADDR: &str =
-        "addr1vyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqkdl5mw";
+    const PAYMENT_ADDR: &str = "addr1vyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqkdl5mw";
     const REWARD_RECV_ADDR: &str =
         "addr1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqv2t5am";
-    const POOL_REWARD_ADDR: &str =
-        "stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq28lj8u";
-    const STAKE_ADDR: &str =
-        "stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq28lj8u";
+    const POOL_REWARD_ADDR: &str = "stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq28lj8u";
+    const STAKE_ADDR: &str = "stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq28lj8u";
 
     fn dummy_chain_context() -> ChainContext {
         ChainContext {
@@ -725,6 +802,57 @@ mod tests {
     }
 
     #[test]
+    fn stake_key_must_match_the_stake_address() {
+        use pallas_addresses::{
+            Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart, StakeAddress,
+        };
+        let stake_address = |cred: ShelleyDelegationPart| -> String {
+            let sh = ShelleyAddress::new(
+                Network::Mainnet,
+                ShelleyPaymentPart::key_hash(Hash::from([1u8; 28])),
+                cred,
+            );
+            let st: StakeAddress = sh.try_into().unwrap();
+            st.to_bech32().unwrap()
+        };
+        let own = [0x22u8; 32];
+        let own_hash = Hash::<28>::from(blake2b224(&own));
+        let addr = stake_address(ShelleyDelegationPart::key_hash(own_hash));
+        assert_stake_vkey_matches_address(&addr, &own).unwrap();
+        // Another key.
+        assert!(matches!(
+            assert_stake_vkey_matches_address(&addr, &[0x33u8; 32]).unwrap_err(),
+            ValidationError::Mismatch("stake key does not match the stake address")
+        ));
+        // A script stake address whose hash equals the key hash.
+        let script = stake_address(ShelleyDelegationPart::script_hash(own_hash));
+        assert!(matches!(
+            assert_stake_vkey_matches_address(&script, &own).unwrap_err(),
+            ValidationError::Mismatch("stake address is script-controlled")
+        ));
+        // Not a stake address at all.
+        assert!(assert_stake_vkey_matches_address(PAYMENT_ADDR, &own).is_err());
+    }
+
+    #[test]
+    fn withdrawal_refuses_a_fee_above_the_ceiling() {
+        // Body and request agree on the fee; the signer still never signs it.
+        let fee = crate::validate::MAX_FEE_LOVELACE + 1;
+        let body = make_withdrawal_body(fee, 2_000_000, 1_000_000_000, 33_909_103);
+        let req = make_withdrawal_request(fee, 2_000_000, 1_000_000_000, 33_909_103);
+        let err = validate_withdrawal_body(&body, &req).unwrap_err();
+        assert!(matches!(
+            err,
+            ValidationError::Mismatch("fee above the signer's ceiling")
+        ));
+        // At the ceiling itself it passes.
+        let fee = crate::validate::MAX_FEE_LOVELACE;
+        let body = make_withdrawal_body(fee, 2_000_000, 1_000_000_000, 33_909_103);
+        let req = make_withdrawal_request(fee, 2_000_000, 1_000_000_000, 33_909_103);
+        validate_withdrawal_body(&body, &req).expect("a fee at the ceiling is accepted");
+    }
+
+    #[test]
     fn withdrawal_happy_path() {
         let body = make_withdrawal_body(200_000, 2_000_000, 1_000_000_000, 33_909_103);
         let req = make_withdrawal_request(200_000, 2_000_000, 1_000_000_000, 33_909_103);
@@ -754,7 +882,10 @@ mod tests {
             fee,
             ttl: Some(ttl),
             certificates: None,
-            withdrawals: Some(NonEmptyKeyValuePairs::Def(vec![(Bytes::from(pool_reward_b), net)])),
+            withdrawals: Some(NonEmptyKeyValuePairs::Def(vec![(
+                Bytes::from(pool_reward_b),
+                net,
+            )])),
             auxiliary_data_hash: None,
             validity_interval_start: None,
             mint: None,
@@ -899,7 +1030,10 @@ mod tests {
         minicbor::encode(&body, &mut buf).unwrap();
         let req = make_withdrawal_request(200_000, 2_000_000, 1_000_000_000, 33_909_103);
         let err = validate_withdrawal_body(&buf, &req).unwrap_err();
-        assert!(matches!(err, ValidationError::Mismatch("unexpected certificates")));
+        assert!(matches!(
+            err,
+            ValidationError::Mismatch("unexpected certificates")
+        ));
     }
 
     #[test]
@@ -932,7 +1066,9 @@ mod tests {
             address_bech32: PAYMENT_ADDR.into(),
         }];
         let err = validate_withdrawal_body(&body, &req).unwrap_err();
-        assert!(matches!(err, ValidationError::Mismatch(s) if s.contains("body inputs do not match")));
+        assert!(
+            matches!(err, ValidationError::Mismatch(s) if s.contains("body inputs do not match"))
+        );
     }
 
     #[test]
@@ -1034,9 +1170,15 @@ mod tests {
         assert!(matches!(err, ValidationError::Mismatch("DRep choice")));
     }
 
-    fn pool_id_b28() -> [u8; 28] { [11u8; 28] }
-    fn vrf_b32() -> [u8; 32] { [22u8; 32] }
-    fn owner_b28() -> [u8; 28] { [33u8; 28] }
+    fn pool_id_b28() -> [u8; 28] {
+        [11u8; 28]
+    }
+    fn vrf_b32() -> [u8; 32] {
+        [22u8; 32]
+    }
+    fn owner_b28() -> [u8; 28] {
+        [33u8; 28]
+    }
 
     fn pool_id_bech32() -> String {
         let hrp = bech32::Hrp::parse("pool").unwrap();
@@ -1081,7 +1223,9 @@ mod tests {
     }
 
     fn make_pool_body_from(req: &PoolUpdateRequest) -> Vec<u8> {
-        let reward_acct_b = Address::from_bech32(&req.reward_account_bech32).unwrap().to_vec();
+        let reward_acct_b = Address::from_bech32(&req.reward_account_bech32)
+            .unwrap()
+            .to_vec();
         let cert = Certificate::PoolRegistration {
             operator: Hash::from(pool_id_b28()),
             vrf_keyhash: Hash::from(vrf_b32()),
@@ -1104,7 +1248,10 @@ mod tests {
         };
         let body = TransactionBody {
             inputs: Set::from(vec![empty_input()]),
-            outputs: vec![coin_output(PAYMENT_ADDR, req.change_to_payment_address_lovelace)],
+            outputs: vec![coin_output(
+                PAYMENT_ADDR,
+                req.change_to_payment_address_lovelace,
+            )],
             fee: req.fee_lovelace,
             ttl: Some(req.ttl_slot),
             certificates: Some(NonEmptySet::try_from(vec![cert]).unwrap()),
@@ -1185,7 +1332,13 @@ mod tests {
             Nullable::Some(Bytes::from(vec![1, 2, 3, 4])),
             Nullable::Null,
         );
-        for bad in ["999.1.2.3.4", "1.2..3.4", "1.2.3.4.", "01.2.3.4", " 1.2.3.4"] {
+        for bad in [
+            "999.1.2.3.4",
+            "1.2..3.4",
+            "1.2.3.4.",
+            "01.2.3.4",
+            " 1.2.3.4",
+        ] {
             let spec = RelaySpec::SingleHostAddr {
                 port: Some(6000),
                 ipv4: Some(bad.into()),
@@ -1303,7 +1456,10 @@ mod tests {
             transaction_id: Hash::from(ACTION_HASH),
             action_index: 0,
         };
-        let procedure = VotingProcedure { vote: Vote::Yes, anchor: Nullable::Null };
+        let procedure = VotingProcedure {
+            vote: Vote::Yes,
+            anchor: Nullable::Null,
+        };
         let inner = NonEmptyKeyValuePairs::Def(vec![(gov_action_id, procedure)]);
         let vps = NonEmptyKeyValuePairs::Def(vec![(voter, inner)]);
         let body = TransactionBody {
@@ -1376,5 +1532,24 @@ mod tests {
         let req = make_vote_request(VoteChoice::Yes, None);
         let err = validate_vote_body(&body, &req).unwrap_err();
         assert!(matches!(err, ValidationError::Mismatch("anchor")));
+    }
+
+    #[test]
+    fn the_signing_owner_must_be_a_pool_owner() {
+        let stake_of = |vkey: &[u8; 32]| {
+            let mut bytes = vec![0xe1];
+            bytes.extend_from_slice(&blake2b224(vkey));
+            bech32::encode::<bech32::Bech32>(bech32::Hrp::parse("stake").unwrap(), &bytes).unwrap()
+        };
+        let mine = [0x11u8; 32];
+        let other = [0x22u8; 32];
+        assert!(
+            assert_owner_vkey_is_pool_owner(&[stake_of(&other), stake_of(&mine)], &mine).is_ok()
+        );
+        assert!(matches!(
+            assert_owner_vkey_is_pool_owner(&[stake_of(&other)], &mine),
+            Err(ValidationError::Mismatch(_))
+        ));
+        assert!(assert_owner_vkey_is_pool_owner(&[], &mine).is_err());
     }
 }

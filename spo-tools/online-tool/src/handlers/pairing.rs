@@ -1,11 +1,11 @@
 use crate::{config, AppState};
-use shared::pairing::{
-    PairingInfoResponse, PairingPreviewBody, PairingPreviewResponse,
-    PairingSetPeerBody, PairingSetPeerResponse,
-};
-use shared::error::ErrorEnvelope;
-use shared::wire_io::decode_pairing_pubkey;
 use axum::{extract::State, Json};
+use shared::error::ErrorEnvelope;
+use shared::pairing::{
+    PairingInfoResponse, PairingPreviewBody, PairingPreviewResponse, PairingSetPeerBody,
+    PairingSetPeerResponse,
+};
+use shared::wire_io::decode_pairing_pubkey;
 use std::sync::Arc;
 use tracing::error;
 
@@ -62,14 +62,18 @@ pub(crate) async fn pairing_set_peer(
     // (if any) stays untouched.
     let fp_display = shared::pairing::validate_peer_and_fingerprint(&own_secret, &peer_pub)?;
     if fp_display != body.expected_fingerprint.trim() {
-        return Err(ErrorEnvelope::invalid("fingerprint mismatch — pairing aborted, on-disk pairing untouched"));
+        return Err(ErrorEnvelope::invalid(
+            "fingerprint mismatch: pairing aborted, on-disk pairing untouched",
+        ));
     }
     // Persist before mutating the shared state so a failed save leaves the
     // in-memory pairing matching what is on disk.
     let mut new = cfg.clone();
     new.peer_crypto_pubkey_hex = Some(hex::encode(peer_pub));
-    config::save(&state.config_path, &new)
-        .map_err(|e| { error!(error = %e, "failed to persist state"); ErrorEnvelope::internal("failed to persist state") })?;
+    config::save(&state.config_path, &new).map_err(|e| {
+        error!(error = %e, "failed to persist state");
+        ErrorEnvelope::internal("failed to persist state")
+    })?;
     *cfg = new;
     Ok(Json(PairingSetPeerResponse {
         paired: true,
@@ -83,8 +87,10 @@ pub(crate) async fn pairing_clear(
     let mut cfg = state.config.write().unwrap_or_else(|e| e.into_inner());
     let mut new = cfg.clone();
     new.peer_crypto_pubkey_hex = None;
-    config::save(&state.config_path, &new)
-        .map_err(|e| { error!(error = %e, "failed to persist state"); ErrorEnvelope::internal("failed to persist state") })?;
+    config::save(&state.config_path, &new).map_err(|e| {
+        error!(error = %e, "failed to persist state");
+        ErrorEnvelope::internal("failed to persist state")
+    })?;
     *cfg = new;
     Ok(Json(serde_json::json!({ "paired": false })))
 }

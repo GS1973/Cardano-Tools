@@ -8,7 +8,7 @@ export const QR_CYCLE_INTERVAL_MS = 800
 /** How often the KES countdown / status ticker repaints itself. */
 export const COUNTDOWN_TICK_INTERVAL_MS = 1000
 
-/** Debounce on the pool-pledge precheck — gives the SPO time to finish
+/** Debounce on the pool-pledge precheck: gives the SPO time to finish
  *  typing before fetching stake totals from Koios. */
 export const PLEDGE_PRECHECK_DEBOUNCE_MS = 500
 
@@ -22,7 +22,7 @@ export const ONLINE_STATUS_POLL_INTERVAL_MS = 90_000
  *  than the online-tool's because air-gap state can change second-to-second. */
 export const SIGNER_STATUS_POLL_INTERVAL_MS = 30_000
 
-/** Default options for QRCode.toDataURL — keep the rendered QR sharp
+/** Default options for QRCode.toDataURL: keep the rendered QR sharp
  *  enough that a webcam decodes it from across the room. */
 export const QRCODE_OPTIONS = {
   margin: 1,

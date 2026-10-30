@@ -8,7 +8,7 @@
   <v-alert type="info" density="compact" variant="tonal" class="mb-4">
     v1.0 supports <code>cardano-cli</code> generated <code>.skey</code> files only.
     Mnemonic wallets: export once with <code>cardano-address</code> to skey format.
-    Hardware wallets (Ledger, Trezor) are not supported.
+    Hardware wallets are not supported.
   </v-alert>
 
   <v-card>
@@ -42,7 +42,7 @@
         </tbody>
       </v-table>
       <div v-if="locked" class="text-caption text-medium-emphasis">
-        Key paths are not displayed. Click Edit to type new paths; saving overwrites the stored values.
+        Key paths are not displayed. Click Edit to type new paths. Saving overwrites the stored values.
       </div>
 
       <template v-if="!locked">
@@ -291,7 +291,7 @@ async function save() {
     }
     const d: SignerConfigStatusResponse = await r.json()
     // Clear the form inputs first (paths are not shown once locked), then
-    // apply the server's re-validated status — doing it the other way round
+    // apply the server's re-validated status: doing it the other way round
     // wipes the just-validated bulbs back to "missing".
     clearForm()
     applyStatus(d)

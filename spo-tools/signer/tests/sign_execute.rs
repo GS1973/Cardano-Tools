@@ -17,13 +17,13 @@
 //!
 //! The tx-signing kinds (withdrawal, drep-delegation, pool-update, vote)
 //! deliberately get *no* signing key, so a fully-authorized request stops
-//! at key-load with `not_configured` — the observable marker that the
+//! at key-load with `not_configured`: the observable marker that the
 //! entire authorization sequence passed. Producing a chain-valid witness
 //! for those kinds additionally needs real Cardano keys and a valid tx
 //! body and is covered by `sign_core`'s unit tests plus manual signer
 //! testing (see the `round_trip.rs` note). Leaderlog and KES rotation
 //! need no tx body, so those two run their signing cores for real against
-//! fabricated keys — which is what lets the exactly-once (replay-refusal)
+//! fabricated keys, which is what lets the exactly-once (replay-refusal)
 //! half of the ledger and the opcert-counter gate be asserted end-to-end.
 //!
 //! Run with: `cargo test -p signer --test sign_execute`. The signer binary
@@ -45,15 +45,15 @@ use shared::leaderlog::LeaderlogRequest;
 use shared::pool_update::PoolUpdateRequest;
 use shared::vote::{VoteChoice, VoteRequest};
 use shared::wire_kind::WireKind;
-use shared::witness_doc::SpoWitnessRequest;
 use shared::withdrawal::WithdrawalRequest;
+use shared::witness_doc::SpoWitnessRequest;
 
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(10);
 const HEALTH_POLL: Duration = Duration::from_millis(50);
 
 /// Deterministic cold seed with its precomputed pool id: bech32 ("pool")
 /// of blake2b-224 over the Ed25519 verification key derived from the
-/// seed — the same fixture as `sign_core`'s unit tests. The rotation
+/// seed: the same fixture as `sign_core`'s unit tests. The rotation
 /// path re-derives and checks this binding before signing.
 const TEST_COLD_SEED: [u8; 32] = [7u8; 32];
 const TEST_POOL_ID: &str = "pool13vscgf9dwn0jt56u965wp99ychz6avktk3pyrye326f3xctz4nm";
@@ -69,6 +69,33 @@ fn pick_free_port() -> u16 {
     let port = l.local_addr().expect("local_addr").port();
     drop(l);
     port
+}
+
+/// Start the binary `build` sets up for a port, and wait until that very
+/// process reports it is listening. A port from `pick_free_port` can be
+/// taken by another test between the pick and the child's own bind, and the
+/// test's requests would then reach that other test's binary, paired with
+/// other keys. A child that exits before it reports is therefore started
+/// again on a new port.
+fn spawn_listening(what: &str, mut build: impl FnMut(u16) -> Command) -> (ChildGuard, u16) {
+    use std::io::BufRead;
+    for _ in 0..5 {
+        let port = pick_free_port();
+        let mut child = build(port)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap_or_else(|e| panic!("spawn {what}: {e}"));
+        let mut lines = std::io::BufReader::new(child.stdout.take().expect("piped stdout")).lines();
+        if lines.any(|l| l.is_ok_and(|l| l.contains("listening on http://"))) {
+            // Keep reading, so the child never blocks on a full pipe.
+            std::thread::spawn(move || lines.for_each(drop));
+            return (ChildGuard(child), port);
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    panic!("{what} did not start on a free port");
 }
 
 async fn wait_for_health(port: u16) {
@@ -114,8 +141,8 @@ fn paired_keys() -> PairedKeys {
     }
 }
 
-/// Write the signer's config — paired with the test's online key, plus any
-/// extra fields (signing-key paths) from `extra_config` — then spawn it
+/// Write the signer's config (paired with the test's online key, plus any
+/// extra fields (signing-key paths) from `extra_config`) then spawn it
 /// with an isolated HOME. The config and state directories are pre-created
 /// so the request ledger persists across the calls of the lockout and
 /// replay tests.
@@ -142,21 +169,18 @@ fn spawn_signer_with_config(
         .write_all(cfg.to_string().as_bytes())
         .expect("write config");
 
-    let port = pick_free_port();
     let bin = signer_bin();
     assert!(
         bin.exists(),
         "signer binary missing at {bin:?}; run `cargo build --bin spo-tools-signer` first"
     );
-    let child = Command::new(&bin)
-        .arg("--listen")
-        .arg(format!("127.0.0.1:{port}"))
-        .env("HOME", home.path())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn signer");
-    (ChildGuard(child), port)
+    spawn_listening("signer", |port| {
+        let mut c = Command::new(&bin);
+        c.arg("--listen")
+            .arg(format!("127.0.0.1:{port}"))
+            .env("HOME", home.path());
+        c
+    })
 }
 
 /// Paired signer with no signing keys configured: every fully-authorized
@@ -241,8 +265,7 @@ fn leaderlog_request(built_at: u64, epoch_length: u64) -> LeaderlogRequest {
         kind: WireKind::Leaderlog,
         pool_id_bech32: "pool1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq8a7a2d".into(),
         epoch: 555,
-        epoch_nonce_hex: "deadbeefcafebabe1234567890abcdefdeadbeefcafebabe1234567890abcdef"
-            .into(),
+        epoch_nonce_hex: "deadbeefcafebabe1234567890abcdefdeadbeefcafebabe1234567890abcdef".into(),
         pool_stake: 2_000_000_000,
         total_active_stake: 20_000_000_000_000,
         active_slots_coeff_numer: 1,
@@ -287,12 +310,12 @@ fn withdrawal_request(built_at: u64) -> WithdrawalRequest {
         net_to_reward_address_lovelace: 5_000_000,
         change_to_payment_address_lovelace: 8_330_000,
         ttl_slot: 152_100_000,
-        payment_address_bech32:
-            "addr1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq".into(),
+        payment_address_bech32: "addr1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
+            .into(),
         reward_receive_address_bech32:
             "addr1qxqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq".into(),
-        pool_reward_address_bech32:
-            "stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq".into(),
+        pool_reward_address_bech32: "stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
+            .into(),
         inputs: vec![],
         operator_pin_proof: String::new(),
         chain_context: fresh_chain_context(built_at),
@@ -306,10 +329,10 @@ fn drep_delegation_request(built_at: u64) -> DRepDelegationRequest {
         fee_lovelace: 170_000,
         change_to_payment_address_lovelace: 8_330_000,
         ttl_slot: 152_100_000,
-        payment_address_bech32:
-            "addr1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq".into(),
-        stake_credential_bech32:
-            "stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq".into(),
+        payment_address_bech32: "addr1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
+            .into(),
+        stake_credential_bech32: "stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
+            .into(),
         drep_choice: DRepChoice::Abstain,
         inputs: vec![],
         operator_pin_proof: String::new(),
@@ -324,16 +347,15 @@ fn pool_update_request(built_at: u64) -> PoolUpdateRequest {
         fee_lovelace: 170_000,
         change_to_payment_address_lovelace: 8_330_000,
         ttl_slot: 152_100_000,
-        payment_address_bech32:
-            "addr1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq".into(),
+        payment_address_bech32: "addr1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
+            .into(),
         pool_id_bech32: TEST_POOL_ID.into(),
         vrf_keyhash_hex: "ab".repeat(32),
         pledge_lovelace: 1_000_000_000,
         fixed_cost_lovelace: 170_000_000,
         margin_numerator: 1,
         margin_denominator: 100,
-        reward_account_bech32:
-            "stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq".into(),
+        reward_account_bech32: "stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq".into(),
         pool_owner_stake_addresses: vec![],
         relays: vec![],
         metadata_url: None,
@@ -351,8 +373,8 @@ fn vote_request(built_at: u64) -> VoteRequest {
         fee_lovelace: 170_000,
         change_to_payment_address_lovelace: 8_330_000,
         ttl_slot: 152_100_000,
-        payment_address_bech32:
-            "addr1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq".into(),
+        payment_address_bech32: "addr1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
+            .into(),
         pool_id_bech32: TEST_POOL_ID.into(),
         action_tx_hash_hex: "cd".repeat(32),
         action_index: 0,
@@ -506,7 +528,10 @@ async fn every_wire_kind_crosses_authorization_to_key_load() {
 
     for (label, fragments) in cases {
         let (status, body) = post_execute(port, &fragments, "1234").await;
-        assert_eq!(status, 412, "{label}: expected not_configured, got {status}: {body}");
+        assert_eq!(
+            status, 412,
+            "{label}: expected not_configured, got {status}: {body}"
+        );
         assert_eq!(
             body.get("code").and_then(Value::as_str),
             Some("not_configured"),
@@ -516,7 +541,7 @@ async fn every_wire_kind_crosses_authorization_to_key_load() {
 }
 
 /// A request whose proof is bound to PIN "1234" is rejected when the
-/// operator types a different PIN — the proof gate fires.
+/// operator types a different PIN: the proof gate fires.
 #[tokio::test]
 async fn rejects_wrong_pin() {
     let keys = paired_keys();
@@ -528,9 +553,15 @@ async fn rejects_wrong_pin() {
     let (status, body) = post_execute(port, &fragments, "9999").await;
 
     assert_eq!(status, 400, "expected invalid_input, got {status}: {body}");
-    assert_eq!(body.get("code").and_then(Value::as_str), Some("invalid_input"));
+    assert_eq!(
+        body.get("code").and_then(Value::as_str),
+        Some("invalid_input")
+    );
     let msg = message(&body);
-    assert!(msg.contains("PIN"), "expected a PIN-mismatch message, got: {msg}");
+    assert!(
+        msg.contains("PIN"),
+        "expected a PIN-mismatch message, got: {msg}"
+    );
 }
 
 /// A request whose chain_context is older than the freshness window is
@@ -548,14 +579,20 @@ async fn rejects_stale_chain_context() {
     let (status, body) = post_execute(port, &fragments, "1234").await;
 
     assert_eq!(status, 400, "expected invalid_input, got {status}: {body}");
-    assert_eq!(body.get("code").and_then(Value::as_str), Some("invalid_input"));
+    assert_eq!(
+        body.get("code").and_then(Value::as_str),
+        Some("invalid_input")
+    );
     let msg = message(&body);
-    assert!(msg.contains("older than"), "expected a staleness message, got: {msg}");
+    assert!(
+        msg.contains("older than"),
+        "expected a staleness message, got: {msg}"
+    );
 }
 
 /// The persistent wrong-PIN ledger composes across separate HTTP calls: the
 /// same request (same payload -> same ledger row) tolerates a bounded number
-/// of wrong-PIN attempts as mismatches, then is locked out outright — even
+/// of wrong-PIN attempts as mismatches, then is locked out outright, even
 /// for the correct PIN. Proves the ledger keys requests by payload hash and
 /// survives request boundaries.
 #[tokio::test]
@@ -573,7 +610,10 @@ async fn locks_out_after_repeated_wrong_pin() {
     // tests cannot import a binary crate's modules.
     for attempt in 1..=5 {
         let (status, body) = post_execute(port, &fragments, "0000").await;
-        assert_eq!(status, 400, "attempt {attempt}: expected invalid_input: {body}");
+        assert_eq!(
+            status, 400,
+            "attempt {attempt}: expected invalid_input: {body}"
+        );
         let msg = message(&body);
         assert!(
             msg.contains("PIN") && msg.contains("mismatch"),
@@ -591,10 +631,13 @@ async fn locks_out_after_repeated_wrong_pin() {
     );
 
     // Lockout binds to the request, not the last-typed PIN: once the
-    // budget is spent even the CORRECT PIN is refused — the property that
+    // budget is spent even the CORRECT PIN is refused: the property that
     // matters against a PIN-guessing adversary.
     let (status, body) = post_execute(port, &fragments, "1234").await;
-    assert_eq!(status, 400, "lockout with correct PIN: expected invalid_input: {body}");
+    assert_eq!(
+        status, 400,
+        "lockout with correct PIN: expected invalid_input: {body}"
+    );
     let msg = message(&body);
     assert!(
         msg.contains("too many PIN attempts"),
@@ -710,8 +753,7 @@ async fn rotates_kes_end_to_end_and_enforces_counter_monotonicity() {
         shared::qr::Direction::Response,
     )
     .expect("decode response");
-    let result: KesRotationResult =
-        serde_json::from_slice(&plaintext).expect("kes result decodes");
+    let result: KesRotationResult = serde_json::from_slice(&plaintext).expect("kes result decodes");
     assert_eq!(result.counter, 7);
     assert_eq!(result.kes_period, 1180);
     assert_eq!(result.pool_id_bech32, TEST_POOL_ID);
@@ -719,7 +761,10 @@ async fn rotates_kes_end_to_end_and_enforces_counter_monotonicity() {
     // The staged bundle lands next to cold.skey, and cold.counter stores
     // the NEXT issue number (cardano-cli semantics: last issued + 1).
     for name in ["kes.skey", "node.cert", "cold.counter"] {
-        assert!(key_dir.path().join(name).exists(), "{name} missing from output dir");
+        assert!(
+            key_dir.path().join(name).exists(),
+            "{name} missing from output dir"
+        );
     }
     let counter_file: Value = serde_json::from_str(
         &std::fs::read_to_string(key_dir.path().join("cold.counter")).expect("read cold.counter"),
@@ -745,7 +790,7 @@ async fn rotates_kes_end_to_end_and_enforces_counter_monotonicity() {
     // is refused by the counter gate. Authorization is all green (fresh
     // payload -> fresh ledger row, correct PIN, fresh context) and KES
     // rotation validates no tx body, so the redacted invalid_input can
-    // only be the counter monotonicity check — as the control below
+    // only be the counter monotonicity check, as the control below
     // confirms.
     let regress = seal_request(
         &keys,
@@ -756,7 +801,10 @@ async fn rotates_kes_end_to_end_and_enforces_counter_monotonicity() {
         |r, p| r.operator_pin_proof = p,
     );
     let (status, body) = post_execute(port, &regress, "1234").await;
-    assert_eq!(status, 400, "counter regression: expected invalid_input: {body}");
+    assert_eq!(
+        status, 400,
+        "counter regression: expected invalid_input: {body}"
+    );
     assert_eq!(
         body.get("code").and_then(Value::as_str),
         Some("invalid_input"),

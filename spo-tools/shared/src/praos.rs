@@ -37,7 +37,9 @@ pub fn build_vrf_input(slot: u64, epoch_nonce: &[u8; 32]) -> [u8; 32] {
     hasher.update(&slot.to_be_bytes());
     hasher.update(epoch_nonce);
     let mut out = [0u8; 32];
-    hasher.finalize_variable(&mut out).expect("blake2b finalize");
+    hasher
+        .finalize_variable(&mut out)
+        .expect("blake2b finalize");
     out
 }
 
@@ -83,11 +85,13 @@ impl PraosThreshold {
         let f_fd = FixedDecimal::from(active_slots_coeff_numer)
             / FixedDecimal::from(active_slots_coeff_denom);
         let c = (&one - &f_fd).ln();
-        let sigma_fd =
-            FixedDecimal::from(pool_stake) / FixedDecimal::from(total_active_stake);
+        let sigma_fd = FixedDecimal::from(pool_stake) / FixedDecimal::from(total_active_stake);
         let neg_sigma_c = -(&sigma_fd * &c);
 
-        Ok(Self { cert_nat_max, neg_sigma_c })
+        Ok(Self {
+            cert_nat_max,
+            neg_sigma_c,
+        })
     }
 
     /// Returns true if `raw_vrf` (the 64-byte VRF proof-to-hash output)

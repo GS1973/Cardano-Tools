@@ -12,7 +12,7 @@
 //! - `cold.counter` envelope: the bumped counter (replaces the old counter on
 //!   both the operator workstation and the BP node)
 //!
-//! The cold key never crosses the QR boundary — only counter, period, and
+//! The cold key never crosses the QR boundary, only counter, period, and
 //! pool identity flow online → signer; only the three new files (and a few
 //! echo-back fields) flow signer → online.
 //!
@@ -20,8 +20,8 @@
 //! as the leaderlog flow.
 
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 use serde_with::{serde_as, DisplayFromStr};
+use ts_rs::TS;
 
 /// Sent online → signer. Everything the signer needs to build a fresh
 /// opcert; the cold signing key itself stays on the encrypted USB.
@@ -50,8 +50,8 @@ pub struct KesRotationRequest {
     /// Operator-PIN proof: 8 bytes (16 hex chars) of blake2b-256 over a
     /// domain-separated, length-prefixed preimage of the request kind,
     /// `chain_context.built_at_unix`, the request-body fingerprint
-    /// (computed with this field blanked) and the operator's 4-digit PIN
-    /// — see [`crate::pin`]. The operator types the PIN at QR-build time
+    /// (computed with this field blanked) and the operator's 4-digit PIN:
+    /// see [`crate::pin`]. The operator types the PIN at QR-build time
     /// on the online tool; the signer prompts for the same PIN after
     /// decrypt and refuses to sign on mismatch. Operator-presence gate at
     /// the moment of signing.
@@ -90,7 +90,6 @@ pub struct KesRotationResult {
     pub cold_counter_filename: String,
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,8 +97,7 @@ mod tests {
     fn sample_request() -> KesRotationRequest {
         KesRotationRequest {
             kind: crate::wire_kind::WireKind::KesRotation,
-            pool_id_bech32:
-                "pool1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq8a7a2d".into(),
+            pool_id_bech32: "pool1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq8a7a2d".into(),
             new_counter: 7,
             kes_period: 1180,
             operator_pin_proof: "0000000000000000".into(),
@@ -116,8 +114,7 @@ mod tests {
 
     fn sample_result() -> KesRotationResult {
         KesRotationResult {
-            pool_id_bech32:
-                "pool1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq8a7a2d".into(),
+            pool_id_bech32: "pool1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq8a7a2d".into(),
             counter: 7,
             kes_period: 1180,
             kes_vkey_hex: "ab".repeat(32),
@@ -151,8 +148,17 @@ mod tests {
         let bytes = serde_json::to_vec(&req).expect("encode");
         let alice = crate::crypto::generate_keypair().unwrap();
         let bob = crate::crypto::generate_keypair().unwrap();
-        let parts = qr::encode_encrypted_payload(&bytes, &bob.public, &alice.secret, qr::Direction::Request).expect("qr encode");
-        let recovered = qr::decode_encrypted_parts(&parts, &alice.public, &bob.secret, qr::Direction::Request).expect("qr decode").expect("complete");
+        let parts = qr::encode_encrypted_payload(
+            &bytes,
+            &bob.public,
+            &alice.secret,
+            qr::Direction::Request,
+        )
+        .expect("qr encode");
+        let recovered =
+            qr::decode_encrypted_parts(&parts, &alice.public, &bob.secret, qr::Direction::Request)
+                .expect("qr decode")
+                .expect("complete");
         let decoded: KesRotationRequest = serde_json::from_slice(&recovered).expect("json decode");
         assert_eq!(req, decoded);
     }
@@ -164,8 +170,17 @@ mod tests {
         let bytes = serde_json::to_vec(&res).expect("encode");
         let alice = crate::crypto::generate_keypair().unwrap();
         let bob = crate::crypto::generate_keypair().unwrap();
-        let parts = qr::encode_encrypted_payload(&bytes, &bob.public, &alice.secret, qr::Direction::Request).expect("qr encode");
-        let recovered = qr::decode_encrypted_parts(&parts, &alice.public, &bob.secret, qr::Direction::Request).expect("qr decode").expect("complete");
+        let parts = qr::encode_encrypted_payload(
+            &bytes,
+            &bob.public,
+            &alice.secret,
+            qr::Direction::Request,
+        )
+        .expect("qr encode");
+        let recovered =
+            qr::decode_encrypted_parts(&parts, &alice.public, &bob.secret, qr::Direction::Request)
+                .expect("qr decode")
+                .expect("complete");
         let decoded: KesRotationResult = serde_json::from_slice(&recovered).expect("json decode");
         assert_eq!(res, decoded);
     }

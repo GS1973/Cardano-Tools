@@ -20,7 +20,10 @@
 //! binaries to be built first: `cargo build --bin spo-tools-online
 //! --bin spo-tools-signer`.
 
-use axum::{routing::{get, post}, Json, Router};
+use axum::{
+    routing::{get, post},
+    Json, Router,
+};
 use serde_json::{json, Value};
 use std::net::TcpListener;
 use std::path::PathBuf;
@@ -51,6 +54,33 @@ fn pick_free_port() -> u16 {
     port
 }
 
+/// Start the binary `build` sets up for a port, and wait until that very
+/// process reports it is listening. A port from `pick_free_port` can be
+/// taken by another test between the pick and the child's own bind, and the
+/// test's requests would then reach that other test's binary, paired with
+/// other keys. A child that exits before it reports is therefore started
+/// again on a new port.
+fn spawn_listening(what: &str, mut build: impl FnMut(u16) -> Command) -> (ChildGuard, u16) {
+    use std::io::BufRead;
+    for _ in 0..5 {
+        let port = pick_free_port();
+        let mut child = build(port)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap_or_else(|e| panic!("spawn {what}: {e}"));
+        let mut lines = std::io::BufReader::new(child.stdout.take().expect("piped stdout")).lines();
+        if lines.any(|l| l.is_ok_and(|l| l.contains("listening on http://"))) {
+            // Keep reading, so the child never blocks on a full pipe.
+            std::thread::spawn(move || lines.for_each(drop));
+            return (ChildGuard(child), port);
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    panic!("{what} did not start on a free port");
+}
+
 /// Block until the online tool's `/health` endpoint returns its JSON body,
 /// or the timeout elapses. Asserts the body, not just 2xx: with an embedded
 /// frontend the SPA fallback answers 200 index.html for any unknown path,
@@ -79,7 +109,7 @@ async fn wait_for_online_health(port: u16) {
 }
 
 /// Same gate for the signer, which registers `/api/health` (it serves no
-/// `/health` route — polling that would only ever hit the SPA fallback).
+/// `/health` route: polling that would only ever hit the SPA fallback).
 async fn wait_for_signer_health(port: u16) {
     let url = format!("http://127.0.0.1:{port}/api/health");
     let client = reqwest::Client::new();
@@ -112,89 +142,119 @@ impl Drop for ChildGuard {
 /// time; nothing on chain is read.
 fn koios_stub_router() -> Router {
     Router::new()
-        .route("/genesis", get(|| async {
-            Json(json!([{
-                "networkmagic": "764824073",
-                "networkid": "Mainnet",
-                "epoch_no": "555",
-                "epochlength": "432000",
-                "slotlength": "1",
-                "maxblocksize": "90112",
-                "maxtxsize": "16384",
-                "systemstart": "1506203091",
-                "activeslotcoeff": "0.05",
-                "slotsperkesperiod": "129600",
-                "maxkesrevolutions": "62",
-                "securityparam": "2160",
-                "updatequorum": "5",
-                "alonzogenesis": "{}"
-            }]))
-        }))
-        .route("/tip", get(|| async {
-            Json(json!([{
-                "abs_slot": 152_000_000_u64,
-                "epoch_no": 555_u64,
-                "epoch_slot": 100_000_u64,
-                "block_no": 11_000_000_u64,
-                "block_time": 1_700_000_000_u64,
-                "hash": "00".repeat(32),
-            }]))
-        }))
-        .route("/pool_info", post(|Json(_b): Json<Value>| async {
-            Json(json!([{
-                "pool_id_bech32": "pool1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq8a7a2d",
-                "pool_id_hex": "00".repeat(28),
-                "vrf_key_hash": "00".repeat(32),
-                "margin": 0.01,
-                "fixed_cost": "340000000",
-                "pledge": "100000000000",
-                "deposit": "500000000",
-                "reward_addr": "stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq28lj8u",
-                "owners": ["stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq28lj8u"],
-                "relays": [],
-                "active_epoch_no": 555,
-                "active_stake": "1000000000000",
-                "live_stake": "1000000000000",
-                "live_pledge": "100000000000",
-                "live_delegators": 1,
-                "live_saturation": 0.1,
-                "block_count": 100,
-                "pool_status": "registered"
-            }]))
-        }))
-        .route("/pool_updates", post(|Json(_b): Json<Value>| async {
-            Json(json!([]))
-        }))
-        .route("/account_info", post(|Json(_b): Json<Value>| async {
-            Json(json!([{
-                "stake_address": "stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq28lj8u",
-                "status": "registered",
-                "delegated_pool": "pool1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq8a7a2d",
-                "total_balance": "0",
-                "utxo": "0",
-                "rewards_available": "0",
-                "withdrawals": "0",
-                "reserves": "0",
-                "treasury": "0",
-            }]))
-        }))
-        .route("/address_utxos", post(|Json(_b): Json<Value>| async {
-            Json(json!([]))
-        }))
-        .route("/submittx", post(|_body: axum::body::Bytes| async {
-            "\"deadbeefcafe1234567890abcdef1234567890abcdef1234567890abcdef1234\""
-        }))
+        .route(
+            "/genesis",
+            get(|| async {
+                Json(json!([{
+                    "networkmagic": "764824073",
+                    "networkid": "Mainnet",
+                    "epoch_no": "555",
+                    "epochlength": "432000",
+                    "slotlength": "1",
+                    "maxblocksize": "90112",
+                    "maxtxsize": "16384",
+                    "systemstart": "1506203091",
+                    "activeslotcoeff": "0.05",
+                    "slotsperkesperiod": "129600",
+                    "maxkesrevolutions": "62",
+                    "securityparam": "2160",
+                    "updatequorum": "5",
+                    "alonzogenesis": "{}"
+                }]))
+            }),
+        )
+        .route(
+            "/tip",
+            get(|| async {
+                Json(json!([{
+                    "abs_slot": 152_000_000_u64,
+                    "epoch_no": 555_u64,
+                    "epoch_slot": 100_000_u64,
+                    "block_no": 11_000_000_u64,
+                    "block_time": 1_700_000_000_u64,
+                    "hash": "00".repeat(32),
+                }]))
+            }),
+        )
+        .route(
+            "/cli_protocol_params",
+            get(|| async {
+                Json(json!({
+                    "txFeePerByte": 44_u64,
+                    "txFeeFixed": 155_381_u64,
+                    "utxoCostPerByte": 4_310_u64,
+                }))
+            }),
+        )
+        .route(
+            "/pool_info",
+            post(|Json(_b): Json<Value>| async {
+                Json(json!([{
+                    "pool_id_bech32": "pool1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq8a7a2d",
+                    "pool_id_hex": "00".repeat(28),
+                    "vrf_key_hash": "00".repeat(32),
+                    "margin": 0.01,
+                    "fixed_cost": "340000000",
+                    "pledge": "100000000000",
+                    "deposit": "500000000",
+                    "reward_addr": "stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq28lj8u",
+                    "owners": ["stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq28lj8u"],
+                    "relays": [],
+                    "active_epoch_no": 555,
+                    "active_stake": "1000000000000",
+                    "live_stake": "1000000000000",
+                    "live_pledge": "100000000000",
+                    "live_delegators": 1,
+                    "live_saturation": 0.1,
+                    "block_count": 100,
+                    "pool_status": "registered"
+                }]))
+            }),
+        )
+        .route(
+            "/pool_updates",
+            post(|Json(_b): Json<Value>| async { Json(json!([])) }),
+        )
+        .route(
+            "/account_info",
+            post(|Json(_b): Json<Value>| async {
+                Json(json!([{
+                    "stake_address": "stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq28lj8u",
+                    "status": "registered",
+                    "delegated_pool": "pool1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq8a7a2d",
+                    "total_balance": "0",
+                    "utxo": "0",
+                    "rewards_available": "0",
+                    "withdrawals": "0",
+                    "reserves": "0",
+                    "treasury": "0",
+                }]))
+            }),
+        )
+        .route(
+            "/address_utxos",
+            post(|Json(_b): Json<Value>| async { Json(json!([])) }),
+        )
+        .route(
+            "/submittx",
+            post(|_body: axum::body::Bytes| async {
+                "\"deadbeefcafe1234567890abcdef1234567890abcdef1234567890abcdef1234\""
+            }),
+        )
 }
 
-/// Spawn the Koios stub on a chosen port. Returns the URL the online
+/// The tests run on two worker threads: starting a binary waits, blocking,
+/// for it to report that it listens, and the Koios stub it fetches from at
+/// startup has to keep answering meanwhile.
+///
+/// Spawn the Koios stub on a port of its own. Returns the URL the online
 /// tool should use as `--koios-url`.
 async fn spawn_koios_stub() -> (String, tokio::task::JoinHandle<()>) {
-    let port = pick_free_port();
     let app = koios_stub_router();
-    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}"))
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind koios stub");
-    let url = format!("http://127.0.0.1:{port}");
+    let url = format!("http://{}", listener.local_addr().expect("stub address"));
     let h = tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
@@ -204,49 +264,43 @@ async fn spawn_koios_stub() -> (String, tokio::task::JoinHandle<()>) {
 /// Spawn the online-tool binary with a tempdir HOME so its config writes
 /// stay isolated, and an explicit Koios stub URL.
 fn spawn_online(home: &TempDir, koios_url: &str) -> (ChildGuard, u16) {
-    let port = pick_free_port();
     let bin = target_dir().join("spo-tools-online");
     assert!(
         bin.exists(),
         "online binary missing at {bin:?}; run `cargo build --bin spo-tools-online` first"
     );
-    let child = Command::new(&bin)
-        .arg("--listen")
-        .arg(format!("127.0.0.1:{port}"))
-        .arg("--koios-url")
-        .arg(koios_url)
-        .env("HOME", home.path())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn online-tool");
-    (ChildGuard(child), port)
+    spawn_listening("online-tool", |port| {
+        let mut c = Command::new(&bin);
+        c.arg("--listen")
+            .arg(format!("127.0.0.1:{port}"))
+            .arg("--koios-url")
+            .arg(koios_url)
+            .env("HOME", home.path());
+        c
+    })
 }
 
 /// Spawn the signer binary with a tempdir HOME.
 fn spawn_signer(home: &TempDir) -> (ChildGuard, u16) {
-    let port = pick_free_port();
     let bin = target_dir().join("spo-tools-signer");
     assert!(
         bin.exists(),
         "signer binary missing at {bin:?}; run `cargo build --bin spo-tools-signer` first"
     );
-    let child = Command::new(&bin)
-        .arg("--listen")
-        .arg(format!("127.0.0.1:{port}"))
-        .env("HOME", home.path())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn signer");
-    (ChildGuard(child), port)
+    spawn_listening("signer", |port| {
+        let mut c = Command::new(&bin);
+        c.arg("--listen")
+            .arg(format!("127.0.0.1:{port}"))
+            .env("HOME", home.path());
+        c
+    })
 }
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn online_returns_not_configured_envelope_before_setup() {
     let (koios_url, _kh) = spawn_koios_stub().await;
     let online_home = TempDir::new().expect("tempdir");
@@ -261,11 +315,14 @@ async fn online_returns_not_configured_envelope_before_setup() {
 
     assert_eq!(r.status().as_u16(), 412);
     let env: Value = r.json().await.expect("envelope JSON");
-    assert_eq!(env.get("code").and_then(Value::as_str), Some("not_configured"));
+    assert_eq!(
+        env.get("code").and_then(Value::as_str),
+        Some("not_configured")
+    );
     assert!(env.get("message").and_then(Value::as_str).is_some());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn online_returns_not_paired_envelope_after_config_without_pairing() {
     let (koios_url, _kh) = spawn_koios_stub().await;
     let online_home = TempDir::new().expect("tempdir");
@@ -299,7 +356,7 @@ async fn online_returns_not_paired_envelope_after_config_without_pairing() {
     assert_eq!(env.get("code").and_then(Value::as_str), Some("not_paired"));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn online_returns_invalid_input_envelope_for_empty_pool_id() {
     let (koios_url, _kh) = spawn_koios_stub().await;
     let online_home = TempDir::new().expect("tempdir");
@@ -320,10 +377,13 @@ async fn online_returns_invalid_input_envelope_for_empty_pool_id() {
 
     assert_eq!(r.status().as_u16(), 400);
     let env: Value = r.json().await.expect("envelope JSON");
-    assert_eq!(env.get("code").and_then(Value::as_str), Some("invalid_input"));
+    assert_eq!(
+        env.get("code").and_then(Value::as_str),
+        Some("invalid_input")
+    );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pairing_round_trip_persists_peer_pubkey_on_both_sides() {
     let (koios_url, _kh) = spawn_koios_stub().await;
     let online_home = TempDir::new().expect("tempdir");
@@ -369,13 +429,19 @@ async fn pairing_round_trip_persists_peer_pubkey_on_both_sides() {
 
     // Step 3: feed signer's UR fragments into online's preview, capture fingerprint.
     let r = client
-        .post(format!("http://127.0.0.1:{online_port}/api/pairing/preview"))
+        .post(format!(
+            "http://127.0.0.1:{online_port}/api/pairing/preview"
+        ))
         .header("Origin", format!("http://127.0.0.1:{online_port}"))
         .json(&json!({ "ur_fragments": signer_fragments }))
         .send()
         .await
         .expect("POST online pairing/preview");
-    assert!(r.status().is_success(), "online preview status {}", r.status());
+    assert!(
+        r.status().is_success(),
+        "online preview status {}",
+        r.status()
+    );
     let online_preview: Value = r.json().await.expect("preview JSON");
     let online_fingerprint = online_preview
         .get("fingerprint")
@@ -385,13 +451,19 @@ async fn pairing_round_trip_persists_peer_pubkey_on_both_sides() {
 
     // Step 4: feed online's UR fragments into signer's preview; fingerprints must match.
     let r = client
-        .post(format!("http://127.0.0.1:{signer_port}/api/pairing/preview"))
+        .post(format!(
+            "http://127.0.0.1:{signer_port}/api/pairing/preview"
+        ))
         .header("Origin", format!("http://127.0.0.1:{signer_port}"))
         .json(&json!({ "ur_fragments": online_fragments }))
         .send()
         .await
         .expect("POST signer pairing/preview");
-    assert!(r.status().is_success(), "signer preview status {}", r.status());
+    assert!(
+        r.status().is_success(),
+        "signer preview status {}",
+        r.status()
+    );
     let signer_preview: Value = r.json().await.expect("signer preview JSON");
     let signer_fingerprint = signer_preview
         .get("fingerprint")
@@ -399,12 +471,14 @@ async fn pairing_round_trip_persists_peer_pubkey_on_both_sides() {
         .expect("fingerprint");
     assert_eq!(
         online_fingerprint, signer_fingerprint,
-        "fingerprints differ — peer pubkey or hash function mismatched between binaries"
+        "fingerprints differ: peer pubkey or hash function mismatched between binaries"
     );
 
     // Step 5: persist on both sides.
     let r = client
-        .post(format!("http://127.0.0.1:{online_port}/api/pairing/set-peer"))
+        .post(format!(
+            "http://127.0.0.1:{online_port}/api/pairing/set-peer"
+        ))
         .header("Origin", format!("http://127.0.0.1:{online_port}"))
         .json(&json!({
             "ur_fragments": signer_fragments,
@@ -413,10 +487,16 @@ async fn pairing_round_trip_persists_peer_pubkey_on_both_sides() {
         .send()
         .await
         .expect("POST online pairing/set-peer");
-    assert!(r.status().is_success(), "online set-peer status {}", r.status());
+    assert!(
+        r.status().is_success(),
+        "online set-peer status {}",
+        r.status()
+    );
 
     let r = client
-        .post(format!("http://127.0.0.1:{signer_port}/api/pairing/set-peer"))
+        .post(format!(
+            "http://127.0.0.1:{signer_port}/api/pairing/set-peer"
+        ))
         .header("Origin", format!("http://127.0.0.1:{signer_port}"))
         .json(&json!({
             "ur_fragments": online_fragments,
@@ -425,7 +505,11 @@ async fn pairing_round_trip_persists_peer_pubkey_on_both_sides() {
         .send()
         .await
         .expect("POST signer pairing/set-peer");
-    assert!(r.status().is_success(), "signer set-peer status {}", r.status());
+    assert!(
+        r.status().is_success(),
+        "signer set-peer status {}",
+        r.status()
+    );
 
     // Step 6: a subsequent /api/withdraw/start no longer returns NotPaired.
     // Configure online first.

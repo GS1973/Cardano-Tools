@@ -6,17 +6,17 @@ export type LeaderlogResultResponse = { pool_id_bech32: string, epoch: number, c
 export type PoolParamsCurrent = { pool_id_bech32: string, vrf_key_hash: string, 
 /**
  * Bech32 stake addresses of all on-chain owners. v1.0 supports
- * single-owner pools only — `is_single_owner` flags multi-owner cases.
+ * single-owner pools only: `is_single_owner` flags multi-owner cases.
  */
 owners: Array<string>, is_single_owner: boolean, pledge_lovelace: number, margin: number, 
 /**
  * Exact margin rational recovered from the Koios float (which is all
- * Koios exposes — see `margin_rational_from_f64`). The build request
+ * Koios exposes: see `margin_rational_from_f64`). The build request
  * takes an exact numerator/denominator back, so prefilling an
  * unedited margin from these keeps it stable across a
  * re-registration instead of drifting to a re-rounded percent
  * (e.g. 1/3 silently becoming 333333/1000000). `None` when no
- * rational reproduces the float — the UI must then warn that
+ * rational reproduces the float: the UI must then warn that
  * re-registering may alter the margin.
  */
 margin_numerator: number | null, margin_denominator: number | null, fixed_cost_lovelace: number, reward_address: string, relays: Array<Relay>, metadata_url: string | null, metadata_hash: string | null, payment_address: string, payment_utxo_total_lovelace: number, estimated_fee_lovelace: number, can_cover_fee: boolean, chain_context: ChainContext, 
@@ -29,7 +29,7 @@ pending: PoolParamsPending | null,
 /**
  * True when Koios `/pool_updates` was unreachable; `pending` will be
  * `None` but the operator should not interpret that as "no pending
- * update" — it just means the check could not be performed.
+ * update": it just means the check could not be performed.
  */
 pending_updates_unavailable: boolean, };
 
