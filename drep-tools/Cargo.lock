@@ -23,7 +23,7 @@ dependencies = [
 
 [[package]]
 name = "airgap-core"
-version = "1.3.0"
+version = "1.4.0"
 dependencies = [
  "axum",
  "bech32 0.11.1",
@@ -51,7 +51,7 @@ dependencies = [
 
 [[package]]
 name = "airgap-fetch-guard"
-version = "1.1.0"
+version = "1.4.0"
 dependencies = [
  "airgap-core",
  "reqwest",
@@ -473,7 +473,7 @@ dependencies = [
 
 [[package]]
 name = "drep-online"
-version = "1.1.2"
+version = "1.4.0"
 dependencies = [
  "airgap-core",
  "airgap-fetch-guard",
@@ -502,7 +502,7 @@ dependencies = [
 
 [[package]]
 name = "drep-signer"
-version = "1.1.2"
+version = "1.4.0"
 dependencies = [
  "airgap-core",
  "axum",
@@ -1795,7 +1795,7 @@ dependencies = [
 
 [[package]]
 name = "shared"
-version = "1.1.2"
+version = "1.4.0"
 dependencies = [
  "airgap-core",
  "bech32 0.11.1",

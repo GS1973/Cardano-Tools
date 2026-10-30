@@ -14,7 +14,7 @@ other's code. Both depend only on `airgap-core`.
 
 ## Status
 
-**v1.1.2**: full lifecycle (register / update / retire / vote) plus a
+**v1.4.0**: full lifecycle (register / update / retire / vote) plus a
 rationale-witness step (the CIP-100 author witness for a vote's CIP-136
 metadata),
 body-level validation on the signer, and an end-to-end encrypted channel
