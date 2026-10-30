@@ -125,9 +125,16 @@ extended form and signs scalar-based, it never treats an extended key as a
 32-byte seed, and cross-checks the embedded public key against the one
 derived from the secret on load.
 
-## Limitations (v1.1)
+## Limitations (v1.4.0)
 
-- Linux only.
+- Linux, x86-64 and arm64. For x86-64, prebuilt binaries ship in two builds: a standard
+  **glibc** build (modern distributions, glibc >= 2.34: Ubuntu 22.04+,
+  Debian 12+, Fedora 35+, RHEL/Rocky/Alma 9+, Arch, recent openSUSE) and
+  a fully static **musl** build (`-musl`) that runs on any x86-64 Linux,
+  including older LTS releases, Alpine, and minimal/live environments.
+  Use `-musl` if the standard build reports `GLIBC_x.xx not found`. For arm64
+  (Raspberry Pi 3/4/5, Zero 2, and other 64-bit ARM boards on a 64-bit OS), a
+  fully static **`-arm64`** build is provided.
 - Key-based wallets only. Hardware-wallet owners are not
   yet supported, on-device signing is on the roadmap.
 - Enterprise (payment-only) wallets can send and receive but cannot
