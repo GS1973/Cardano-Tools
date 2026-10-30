@@ -9,7 +9,7 @@ Self-hosted, open source, Linux-only. No Docker, no SaaS, no mobile apps.
 
 ## Status
 
-**v1.1.2**: production-ready. Six operational features plus a
+**v1.1.3**: production-ready. Six operational features plus a
 rationale-witness step, body-level validation on the signer, and an
 end-to-end encrypted channel between online tool and signer. The six
 operational features are validated on Cardano mainnet against a live
