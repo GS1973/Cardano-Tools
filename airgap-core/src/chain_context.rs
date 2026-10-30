@@ -1,4 +1,4 @@
-//! Chain context — the snapshot of mainnet state that the online tool
+//! Chain context: the snapshot of mainnet state that the online tool
 //! attaches to every request crossing the QR/clipboard to the signer.
 //!
 //! The signer is air-gapped and therefore has no live source of chain
@@ -9,15 +9,15 @@
 //! so the header continues to show "last-known" values between sessions.
 //!
 //! This means:
-//!   * Signer is purely a crypto tool — no Cardano protocol knowledge baked in.
+//!   * Signer is purely a crypto tool: no Cardano protocol knowledge baked in.
 //!   * A hard fork that changes epoch_length etc. is absorbed by the online
 //!     tool's runtime fetch from Koios; signer needs no recompile.
-//!   * The signer's view of "what epoch is it" is honest — it reflects
+//!   * The signer's view of "what epoch is it" is honest: it reflects
 //!     the moment of the last received request, not a wall-clock guess.
 
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 use serde_with::{serde_as, DisplayFromStr};
+use ts_rs::TS;
 
 #[serde_as]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
@@ -54,7 +54,7 @@ pub struct ChainContext {
 
 /// Maximum forward clock skew tolerated between online tool and signer.
 /// Beyond this, a request stamped `built_at_unix > now` is rejected as
-/// stale — closes the saturating-subtract bypass where a future-dated
+/// stale: closes the saturating-subtract bypass where a future-dated
 /// request would silently appear fresh forever.
 const MAX_FORWARD_CLOCK_SKEW_SECS: u64 = 60;
 

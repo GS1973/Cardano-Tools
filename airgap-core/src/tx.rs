@@ -2,31 +2,41 @@
 //! DREP Tools, and Wallet Tools.
 //!
 //! Address decoding, output construction, input parsing, and final
-//! signed-tx assembly are identical across every on-chain operation —
+//! signed-tx assembly are identical across every on-chain operation,
 //! only the certificate / voting-procedure middle of the body differs per
 //! tool. Those shared pieces live here so no tool re-implements (and
 //! risks diverging on) the exact bytes that determine a transaction hash.
 
+use crate::asset::Asset;
 use pallas_addresses::{Address, Network};
 use pallas_codec::minicbor;
 use pallas_codec::utils::{Bytes, NonEmptyKeyValuePairs, NonEmptySet, PositiveCoin};
 use pallas_primitives::alonzo::VKeyWitness;
+use pallas_primitives::babbage::PseudoPostAlonzoTransactionOutput;
 use pallas_primitives::conway::{
     PseudoTransactionOutput, TransactionBody, TransactionOutput, Value, WitnessSet,
 };
 use pallas_primitives::{AssetName, Hash, PolicyId, TransactionInput};
-use thiserror::Error;
-use crate::asset::Asset;
-use pallas_primitives::babbage::PseudoPostAlonzoTransactionOutput;
 use std::collections::BTreeMap;
+use thiserror::Error;
 
 fn cbor_text(s: &str) -> Vec<u8> {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len() + 2);
     match b.len() {
         n @ 0..=23 => out.push(0x60 | n as u8),
-        n @ 24..=255 => { out.push(0x78); out.push(n as u8); }
-        n => { out.push(0x79); out.extend_from_slice(&(n as u16).to_be_bytes()); }
+        n @ 24..=255 => {
+            out.push(0x78);
+            out.push(n as u8);
+        }
+        n @ 256..=0xffff => {
+            out.push(0x79);
+            out.extend_from_slice(&(n as u16).to_be_bytes());
+        }
+        n => {
+            out.push(0x7a);
+            out.extend_from_slice(&(n as u32).to_be_bytes());
+        }
     }
     out.extend_from_slice(b);
     out
@@ -36,9 +46,22 @@ fn cbor_uint(n: u64) -> Vec<u8> {
     match n {
         0..=23 => vec![n as u8],
         24..=0xff => vec![0x18, n as u8],
-        0x100..=0xffff => { let b = (n as u16).to_be_bytes(); vec![0x19, b[0], b[1]] }
-        0x10000..=0xffffffff => { let b = (n as u32).to_be_bytes(); let mut v = vec![0x1a]; v.extend_from_slice(&b); v }
-        _ => { let b = n.to_be_bytes(); let mut v = vec![0x1b]; v.extend_from_slice(&b); v }
+        0x100..=0xffff => {
+            let b = (n as u16).to_be_bytes();
+            vec![0x19, b[0], b[1]]
+        }
+        0x10000..=0xffffffff => {
+            let b = (n as u32).to_be_bytes();
+            let mut v = vec![0x1a];
+            v.extend_from_slice(&b);
+            v
+        }
+        _ => {
+            let b = n.to_be_bytes();
+            let mut v = vec![0x1b];
+            v.extend_from_slice(&b);
+            v
+        }
     }
 }
 
@@ -62,11 +85,14 @@ pub fn build_cip20_aux_data_cbor(lines: &[String]) -> Result<Vec<u8>, TxBuildErr
     buf.extend(cbor_uint(674)); // key: 674
     buf.push(0xa1); // map(1) -- value
     buf.extend(cbor_text("msg")); // key: "msg"
-    // array of msg lines
+                                  // array of msg lines
     let n = lines.len();
     match n {
         0..=23 => buf.push(0x80 | n as u8),
-        24..=255 => { buf.push(0x98); buf.push(n as u8); }
+        24..=255 => {
+            buf.push(0x98);
+            buf.push(n as u8);
+        }
         _ => return Err(TxBuildError::Cbor("too many CIP-20 metadata lines".into())),
     }
     for line in lines {
@@ -83,14 +109,20 @@ pub enum TxBuildError {
     WrongHrp(&'static str, String),
     #[error("address `{0}` is not a mainnet address")]
     WrongNetwork(String),
-    #[error("address `{0}` header encodes a `{1}` payload, which does not match its bech32 prefix")]
+    #[error(
+        "address `{0}` header encodes a `{1}` payload, which does not match its bech32 prefix"
+    )]
     WrongAddressKind(String, &'static str),
     #[error("invalid 32-byte hex hash: {0}")]
     HashHex(String),
     #[error("CBOR encode failed: {0}")]
     Cbor(String),
     #[error("{field} must be {expected} bytes, got {got}")]
-    WitnessLen { field: &'static str, expected: usize, got: usize },
+    WitnessLen {
+        field: &'static str,
+        expected: usize,
+        got: usize,
+    },
     #[error("fee {fee} exceeds combined input value {utxo_total}")]
     InsufficientInputs { fee: u64, utxo_total: u64 },
     #[error("invalid hex in {0}")]
@@ -104,7 +136,13 @@ pub enum TxBuildError {
     #[error("could not build asset map: {0}")]
     AssetMap(&'static str),
     #[error("insufficient asset {asset}: need {need}, have {have}")]
-    InsufficientAsset { asset: String, need: u128, have: u128 },
+    InsufficientAsset {
+        asset: String,
+        need: u128,
+        have: u128,
+    },
+    #[error("{0} does not fit in a u64")]
+    Overflow(&'static str),
 }
 
 /// One transaction input as the builders take it: a 64-char hex tx hash
@@ -128,15 +166,15 @@ pub fn check_tx_hash_hex_len(s: &str) -> Result<(), TxBuildError> {
 
 /// Decode a bech32 Cardano address and confirm both its human-readable
 /// prefix and its payload header match `expected_hrp` (`addr` or `stake`).
-/// The HRP alone proves nothing — bech32 lets an encoder wrap any payload
-/// under any prefix with a valid checksum — so after the HRP equality
+/// The HRP alone proves nothing, bech32 lets an encoder wrap any payload
+/// under any prefix with a valid checksum, so after the HRP equality
 /// check the parsed header is checked too: the network nibble must be
 /// mainnet and the address kind must be what the prefix promises (a
 /// payment-capable Shelley address for `addr`, a reward account for
 /// `stake`). These tools are mainnet-only: a testnet HRP (`addr_test` /
 /// `stake_test`) or a testnet network nibble is rejected, not silently
 /// accepted, so a testnet address can never slip into a mainnet
-/// transaction. Byron legacy addresses are rejected outright — no
+/// transaction. Byron legacy addresses are rejected outright: no
 /// operation built here uses them.
 pub fn decode_address(bech32: &str, expected_hrp: &'static str) -> Result<Vec<u8>, TxBuildError> {
     let parsed = Address::from_bech32(bech32)
@@ -194,7 +232,7 @@ pub fn parse_input(u: &TxInput) -> Result<TransactionInput, TxBuildError> {
     })
 }
 
-/// Pair of vkey + signature, both as raw bytes — what comes out of the
+/// Pair of vkey + signature, both as raw bytes: what comes out of the
 /// signer's witness JSON after hex-decoding.
 pub struct RawVkeyWitness {
     pub vkey: Vec<u8>,
@@ -230,10 +268,18 @@ pub fn assemble_signed_tx_with_aux(
     }
     for w in witnesses {
         if w.vkey.len() != 32 {
-            return Err(TxBuildError::WitnessLen { field: "vkey witness key", expected: 32, got: w.vkey.len() });
+            return Err(TxBuildError::WitnessLen {
+                field: "vkey witness key",
+                expected: 32,
+                got: w.vkey.len(),
+            });
         }
         if w.signature.len() != 64 {
-            return Err(TxBuildError::WitnessLen { field: "vkey witness signature", expected: 64, got: w.signature.len() });
+            return Err(TxBuildError::WitnessLen {
+                field: "vkey witness signature",
+                expected: 64,
+                got: w.signature.len(),
+            });
         }
     }
     // Decoding one item from the front is not enough: minicbor ignores
@@ -320,7 +366,8 @@ type AssetKey = (String, String); // (policy_hex, asset_name_hex)
 fn aggregate(assets: &[Asset]) -> BTreeMap<AssetKey, u128> {
     let mut m: BTreeMap<AssetKey, u128> = BTreeMap::new();
     for a in assets {
-        *m.entry((a.policy_hex.clone(), a.asset_name_hex.clone())).or_insert(0) += a.quantity as u128;
+        *m.entry((a.policy_hex.clone(), a.asset_name_hex.clone()))
+            .or_insert(0) += a.quantity as u128;
     }
     m
 }
@@ -331,9 +378,16 @@ fn aggregate(assets: &[Asset]) -> BTreeMap<AssetKey, u128> {
 pub fn change_assets(available: &[Asset], sent: &[Asset]) -> Result<Vec<Asset>, TxBuildError> {
     let mut avail = aggregate(available);
     for ((pol, name), need) in aggregate(sent) {
-        let have = avail.get(&(pol.clone(), name.clone())).copied().unwrap_or(0);
+        let have = avail
+            .get(&(pol.clone(), name.clone()))
+            .copied()
+            .unwrap_or(0);
         if need > have {
-            return Err(TxBuildError::InsufficientAsset { asset: format!("{pol}.{name}"), need, have });
+            return Err(TxBuildError::InsufficientAsset {
+                asset: format!("{pol}.{name}"),
+                need,
+                have,
+            });
         }
         avail.insert((pol, name), have - need);
     }
@@ -343,7 +397,11 @@ pub fn change_assets(available: &[Asset], sent: &[Asset]) -> Result<Vec<Asset>, 
             continue;
         }
         let quantity = u64::try_from(q).map_err(|_| TxBuildError::QuantityOverflow)?;
-        change.push(Asset { policy_hex, asset_name_hex, quantity });
+        change.push(Asset {
+            policy_hex,
+            asset_name_hex,
+            quantity,
+        });
     }
     Ok(change)
 }
@@ -387,22 +445,32 @@ pub fn make_asset_output(
             .map_err(|_| TxBuildError::AssetMap("empty asset name map"))?;
         outer.push((policy, inner_map));
     }
-    let multiasset =
-        NonEmptyKeyValuePairs::try_from(outer).map_err(|_| TxBuildError::AssetMap("empty policy map"))?;
-    Ok(PseudoTransactionOutput::PostAlonzo(PseudoPostAlonzoTransactionOutput {
-        address: Bytes::from(address),
-        value: Value::Multiasset(lovelace, multiasset),
-        datum_option: None,
-        script_ref: None,
-    }))
+    let multiasset = NonEmptyKeyValuePairs::try_from(outer)
+        .map_err(|_| TxBuildError::AssetMap("empty policy map"))?;
+    Ok(PseudoTransactionOutput::PostAlonzo(
+        PseudoPostAlonzoTransactionOutput {
+            address: Bytes::from(address),
+            value: Value::Multiasset(lovelace, multiasset),
+            datum_option: None,
+            script_ref: None,
+        },
+    ))
 }
 
 /// Min lovelace for a UTxO with this output: (serialized size + 160-byte
-/// constant overhead) x coinsPerUtxoByte (Conway).
-pub fn min_ada_for_output(output: &TransactionOutput, utxo_cost_per_byte: u64) -> Result<u64, TxBuildError> {
+/// constant overhead) x coinsPerUtxoByte (Conway). `utxo_cost_per_byte` can
+/// come from a chain-data provider, so the product is checked: a value that
+/// does not fit is an error, never a panic or a wrapped amount.
+pub fn min_ada_for_output(
+    output: &TransactionOutput,
+    utxo_cost_per_byte: u64,
+) -> Result<u64, TxBuildError> {
     let mut buf = Vec::new();
     minicbor::encode(output, &mut buf).map_err(|e| TxBuildError::Cbor(e.to_string()))?;
-    Ok((buf.len() as u64 + 160) * utxo_cost_per_byte)
+    (buf.len() as u64)
+        .checked_add(160)
+        .and_then(|n| n.checked_mul(utxo_cost_per_byte))
+        .ok_or(TxBuildError::Overflow("min-ADA"))
 }
 
 #[cfg(test)]
@@ -413,24 +481,39 @@ mod tests {
 
     const POLICY_A: &str = "00112233445566778899aabbccddeeff00112233445566778899aabb";
     fn mk_asset(policy: &str, name: &str, q: u64) -> Asset {
-        Asset { policy_hex: policy.into(), asset_name_hex: name.into(), quantity: q }
+        Asset {
+            policy_hex: policy.into(),
+            asset_name_hex: name.into(),
+            quantity: q,
+        }
     }
 
     #[test]
     fn change_assets_subtracts_and_drops_zero() {
-        let change = change_assets(&[mk_asset(POLICY_A, "aa", 10)], &[mk_asset(POLICY_A, "aa", 10)]).unwrap();
+        let change = change_assets(
+            &[mk_asset(POLICY_A, "aa", 10)],
+            &[mk_asset(POLICY_A, "aa", 10)],
+        )
+        .unwrap();
         assert!(change.is_empty());
     }
 
     #[test]
     fn change_assets_partial() {
-        let change = change_assets(&[mk_asset(POLICY_A, "aa", 10)], &[mk_asset(POLICY_A, "aa", 3)]).unwrap();
+        let change = change_assets(
+            &[mk_asset(POLICY_A, "aa", 10)],
+            &[mk_asset(POLICY_A, "aa", 3)],
+        )
+        .unwrap();
         assert_eq!(change, vec![mk_asset(POLICY_A, "aa", 7)]);
     }
 
     #[test]
     fn change_assets_insufficient_errors() {
-        let err = change_assets(&[mk_asset(POLICY_A, "aa", 2)], &[mk_asset(POLICY_A, "aa", 5)]);
+        let err = change_assets(
+            &[mk_asset(POLICY_A, "aa", 2)],
+            &[mk_asset(POLICY_A, "aa", 5)],
+        );
         assert!(matches!(err, Err(TxBuildError::InsufficientAsset { .. })));
     }
 
@@ -438,9 +521,34 @@ mod tests {
     fn change_assets_overflow_errors_instead_of_truncating() {
         // Two UTxOs of the same asset summing past u64::MAX must fail fast
         // with QuantityOverflow, not silently truncate the change quantity.
-        let avail = [mk_asset(POLICY_A, "aa", u64::MAX), mk_asset(POLICY_A, "aa", 1)];
+        let avail = [
+            mk_asset(POLICY_A, "aa", u64::MAX),
+            mk_asset(POLICY_A, "aa", 1),
+        ];
         let err = change_assets(&avail, &[]);
         assert!(matches!(err, Err(TxBuildError::QuantityOverflow)));
+    }
+
+    #[test]
+    fn min_ada_is_size_plus_overhead_times_cost() {
+        let addr = decode_address(PAYMENT_ADDR, "addr").unwrap();
+        let out = make_output(addr, 1_000_000);
+        let mut buf = Vec::new();
+        minicbor::encode(&out, &mut buf).unwrap();
+        assert_eq!(
+            min_ada_for_output(&out, 4310).unwrap(),
+            (buf.len() as u64 + 160) * 4310
+        );
+    }
+
+    #[test]
+    fn min_ada_overflow_is_an_error_not_a_panic() {
+        let addr = decode_address(PAYMENT_ADDR, "addr").unwrap();
+        let out = make_output(addr, 1_000_000);
+        assert!(matches!(
+            min_ada_for_output(&out, u64::MAX),
+            Err(TxBuildError::Overflow("min-ADA"))
+        ));
     }
 
     #[test]
@@ -455,7 +563,8 @@ mod tests {
     #[test]
     fn make_asset_output_round_trips_byte_exact() {
         let addr = decode_address(PAYMENT_ADDR, "addr").unwrap();
-        let out = make_asset_output(addr, 2_000_000, &[mk_asset(POLICY_A, "4e49474854", 42)]).unwrap();
+        let out =
+            make_asset_output(addr, 2_000_000, &[mk_asset(POLICY_A, "4e49474854", 42)]).unwrap();
         let mut buf = Vec::new();
         minicbor::encode(&out, &mut buf).unwrap();
         let back: TransactionOutput = minicbor::decode(&buf).unwrap();
@@ -586,8 +695,14 @@ mod tests {
     fn assemble_wraps_body_verbatim_with_two_witnesses() {
         let body = minimal_body();
         let witnesses = vec![
-            RawVkeyWitness { vkey: vec![0u8; 32], signature: vec![0u8; 64] },
-            RawVkeyWitness { vkey: vec![1u8; 32], signature: vec![1u8; 64] },
+            RawVkeyWitness {
+                vkey: vec![0u8; 32],
+                signature: vec![0u8; 64],
+            },
+            RawVkeyWitness {
+                vkey: vec![1u8; 32],
+                signature: vec![1u8; 64],
+            },
         ];
         let signed = assemble_signed_tx(&body, &witnesses).unwrap();
         assert_eq!(signed[0], 0x84);
@@ -610,15 +725,27 @@ mod tests {
     #[test]
     fn assemble_rejects_wrong_witness_lengths() {
         let body = minimal_body();
-        let short_vkey = vec![RawVkeyWitness { vkey: vec![0u8; 31], signature: vec![0u8; 64] }];
+        let short_vkey = vec![RawVkeyWitness {
+            vkey: vec![0u8; 31],
+            signature: vec![0u8; 64],
+        }];
         assert!(matches!(
             assemble_signed_tx(&body, &short_vkey).unwrap_err(),
-            TxBuildError::WitnessLen { field: "vkey witness key", .. }
+            TxBuildError::WitnessLen {
+                field: "vkey witness key",
+                ..
+            }
         ));
-        let short_sig = vec![RawVkeyWitness { vkey: vec![0u8; 32], signature: vec![0u8; 63] }];
+        let short_sig = vec![RawVkeyWitness {
+            vkey: vec![0u8; 32],
+            signature: vec![0u8; 63],
+        }];
         assert!(matches!(
             assemble_signed_tx(&body, &short_sig).unwrap_err(),
-            TxBuildError::WitnessLen { field: "vkey witness signature", .. }
+            TxBuildError::WitnessLen {
+                field: "vkey witness signature",
+                ..
+            }
         ));
     }
 
@@ -629,7 +756,10 @@ mod tests {
         // of the tx array. Assembly must require full consumption.
         let mut body = minimal_body();
         body.push(0x00);
-        let witnesses = vec![RawVkeyWitness { vkey: vec![0u8; 32], signature: vec![0u8; 64] }];
+        let witnesses = vec![RawVkeyWitness {
+            vkey: vec![0u8; 32],
+            signature: vec![0u8; 64],
+        }];
         assert!(matches!(
             assemble_signed_tx(&body, &witnesses).unwrap_err(),
             TxBuildError::Cbor(_)
@@ -641,16 +771,25 @@ mod tests {
         let aux = build_cip20_aux_data_cbor(&["hello".to_string()]).unwrap();
         let h = pallas_crypto::hash::Hasher::<256>::hash(&aux);
         let body = minimal_body_with_aux_hash(Some(Bytes::from(h.as_ref().to_vec())));
-        let witnesses = vec![RawVkeyWitness { vkey: vec![0u8; 32], signature: vec![0u8; 64] }];
+        let witnesses = vec![RawVkeyWitness {
+            vkey: vec![0u8; 32],
+            signature: vec![0u8; 64],
+        }];
         let signed = assemble_signed_tx_with_aux(&body, &witnesses, Some(&aux)).unwrap();
-        assert!(signed.ends_with(&aux), "aux bytes should fill the 4th slot verbatim");
+        assert!(
+            signed.ends_with(&aux),
+            "aux bytes should fill the 4th slot verbatim"
+        );
         let _: pallas_primitives::conway::Tx = minicbor::decode(&signed).unwrap();
     }
 
     #[test]
     fn assemble_rejects_aux_data_not_matching_body_hash() {
         let aux = build_cip20_aux_data_cbor(&["hello".to_string()]).unwrap();
-        let witnesses = vec![RawVkeyWitness { vkey: vec![0u8; 32], signature: vec![0u8; 64] }];
+        let witnesses = vec![RawVkeyWitness {
+            vkey: vec![0u8; 32],
+            signature: vec![0u8; 64],
+        }];
         // Body commits a different hash than blake2b-256(aux).
         let body = minimal_body_with_aux_hash(Some(Bytes::from(vec![0u8; 32])));
         assert!(matches!(
@@ -669,5 +808,15 @@ mod tests {
             assemble_signed_tx(&body, &witnesses).unwrap_err(),
             TxBuildError::Cbor(_)
         ));
+    }
+
+    #[test]
+    fn text_lengths_get_their_own_cbor_header() {
+        assert_eq!(&cbor_text(&"a".repeat(23))[..1], &[0x77]);
+        assert_eq!(&cbor_text(&"a".repeat(24))[..2], &[0x78, 24]);
+        assert_eq!(&cbor_text(&"a".repeat(256))[..3], &[0x79, 1, 0]);
+        let long = cbor_text(&"a".repeat(70_000));
+        assert_eq!(&long[..5], &[0x7a, 0, 1, 0x11, 0x70]);
+        assert_eq!(long.len(), 5 + 70_000);
     }
 }

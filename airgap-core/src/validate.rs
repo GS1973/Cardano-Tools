@@ -2,10 +2,10 @@
 //!
 //! Before an air-gapped signer hashes a Conway `TransactionBody` and
 //! signs it, it must verify the body actually does what the matching
-//! request says. The pieces that are identical across every operation —
-//! decoding the body, the central forbidden-field guard, binding the
+//! request says. The pieces that are identical across every operation
+//! (decoding the body, the central forbidden-field guard, binding the
 //! inputs to the request, reading an output, comparing a rationale
-//! anchor, and the blake2b-224 credential hash — live here so SPO Tools,
+//! anchor, and the blake2b-224 credential hash) live here so SPO Tools,
 //! DREP Tools, and Wallet Tools share one implementation and cannot
 //! drift apart on the checks that gate key use. Each tool layers its
 //! operation-specific validator on top (asserting the exact cert /
@@ -40,7 +40,9 @@ pub enum ValidationError {
 /// so the body item must consume the buffer exactly.
 pub fn decode_body(body_bytes: &[u8]) -> Result<TransactionBody, ValidationError> {
     let mut dec = minicbor::Decoder::new(body_bytes);
-    let body: TransactionBody = dec.decode().map_err(|e| ValidationError::Decode(e.to_string()))?;
+    let body: TransactionBody = dec
+        .decode()
+        .map_err(|e| ValidationError::Decode(e.to_string()))?;
     if dec.position() != body_bytes.len() {
         return Err(ValidationError::Decode(format!(
             "body cbor has {} trailing bytes",
@@ -61,7 +63,7 @@ pub fn decode_body(body_bytes: &[u8]) -> Result<TransactionBody, ValidationError
 /// `voting_procedures` field while every other dangerous field stays
 /// forbidden, so a vote validator cannot drift from the other operations'
 /// guard. `certificates` and `withdrawals` are intentionally NOT decided
-/// here — each operation validator asserts their exact presence/absence
+/// here: each operation validator asserts their exact presence/absence
 /// and contents itself.
 pub fn assert_no_extra_fields_inner(
     body: &TransactionBody,
@@ -108,9 +110,114 @@ pub fn assert_no_extra_fields_inner(
         return Err(ValidationError::Mismatch("unexpected auxiliary_data_hash"));
     }
     if body.validity_interval_start.is_some() {
-        return Err(ValidationError::Mismatch("unexpected validity_interval_start"));
+        return Err(ValidationError::Mismatch(
+            "unexpected validity_interval_start",
+        ));
     }
     Ok(())
+}
+
+/// The highest fee any of these signers will put a signature under,
+/// whatever the request says. The body validators bind the fee to the
+/// request, but the request is written by the online tool, in some tools
+/// from provider-supplied protocol parameters; without a ceiling a
+/// compromised online tool or a lying provider could burn the funding
+/// UTxOs into the fee with only the operator's reading of the preview in
+/// the way.
+///
+/// 3 ADA leaves room over the largest fee these operations can honestly
+/// produce at the current mainnet parameters: about 0.88 ADA for a
+/// transaction of the maximum size (44 x 16384 + 155381 lovelace), plus,
+/// where a tool folds a sub-min-ADA remainder into the fee, just under
+/// 1 ADA more. Should a parameter change ever lift honest fees past it, the
+/// signers refuse (fail closed) and this constant is raised in a new
+/// release.
+pub const MAX_FEE_LOVELACE: u64 = 3_000_000;
+
+/// Refuse a fee above [`MAX_FEE_LOVELACE`].
+pub fn assert_fee_within_ceiling(fee_lovelace: u64) -> Result<(), ValidationError> {
+    if fee_lovelace > MAX_FEE_LOVELACE {
+        return Err(ValidationError::Mismatch("fee above the signer's ceiling"));
+    }
+    Ok(())
+}
+
+/// Unix time of mainnet slot 0 on the one-slot-per-second clock that has
+/// run since Shelley: slot 4 492 800 began at 1 596 059 091 (2020-07-29
+/// 21:44:51 UTC), so `slot = unix - MAINNET_SLOT_ZERO_UNIX` for any time
+/// after that.
+pub const MAINNET_SLOT_ZERO_UNIX: u64 = 1_591_566_291;
+
+/// The furthest a transaction's time-to-live may lie beyond the signer's
+/// own clock: three hours of slots.
+///
+/// The body validators bind the TTL to the request and require it to be
+/// after the request's `current_slot`, but both numbers are written by
+/// the online tool. Without an upper bound a compromised online tool could
+/// set a TTL years ahead, and the signed transaction would stay valid for
+/// as long, to be held back and submitted later. The online tools set a
+/// TTL two hours past the tip. Three hours leaves one hour for a signer
+/// clock that runs behind, and the time spent between building and
+/// signing only brings the TTL closer to the clock. Should the slot length ever change, the signers refuse
+/// (fail closed) and the slot constant is updated in a new release.
+pub const MAX_TTL_AHEAD_SLOTS: u64 = 10_800;
+
+/// The mainnet slot at `unix` seconds (saturating at slot 0 for an
+/// impossible earlier time).
+pub fn mainnet_slot_at(unix: u64) -> u64 {
+    unix.saturating_sub(MAINNET_SLOT_ZERO_UNIX)
+}
+
+/// Refuse a TTL more than [`MAX_TTL_AHEAD_SLOTS`] past the slot the
+/// signer's own clock reads (`now_unix`).
+pub fn assert_ttl_within_window(ttl_slot: u64, now_unix: u64) -> Result<(), ValidationError> {
+    let limit = mainnet_slot_at(now_unix).saturating_add(MAX_TTL_AHEAD_SLOTS);
+    if ttl_slot > limit {
+        return Err(ValidationError::Mismatch(
+            "ttl too far past the signer's clock",
+        ));
+    }
+    Ok(())
+}
+
+/// Confirm that `address_bech32` is controlled by the payment key the
+/// signer holds: its payment credential must be the blake2b-224 hash of
+/// `payment_vkey`.
+///
+/// The body validators pin the change output to the request's payment
+/// address, but the request is written by the online tool. Without this
+/// check a compromised online tool could name an address of its own as the
+/// payment address, spend the operator's real UTxOs (which the payment key
+/// can sign for) and collect the change there; only the operator reading a
+/// bech32 string would stand in the way. Only the payment part is bound:
+/// the address may be an enterprise address or carry any stake part, so a
+/// separate fee address with its own key works as before. A change address
+/// with the right payment credential but a foreign stake part stays
+/// spendable by this key alone.
+pub fn assert_payment_key_controls_address(
+    payment_vkey: &[u8; 32],
+    address_bech32: &str,
+) -> Result<(), ValidationError> {
+    use pallas_addresses::ShelleyPaymentPart;
+    let parsed = Address::from_bech32(address_bech32)
+        .map_err(|e| ValidationError::BadAddress(address_bech32.to_string(), e.to_string()))?;
+    let shelley = match &parsed {
+        Address::Shelley(s) => s,
+        _ => {
+            return Err(ValidationError::Mismatch(
+                "payment address is not a Shelley payment address",
+            ))
+        }
+    };
+    match shelley.payment() {
+        ShelleyPaymentPart::Key(h) if h.as_ref() == blake2b224(payment_vkey) => Ok(()),
+        ShelleyPaymentPart::Key(_) => Err(ValidationError::Mismatch(
+            "payment address is not controlled by this signer's payment key",
+        )),
+        ShelleyPaymentPart::Script(_) => Err(ValidationError::Mismatch(
+            "payment address is script-controlled",
+        )),
+    }
 }
 
 /// Decode a bech32 address to its raw on-chain bytes.
@@ -137,7 +244,9 @@ pub fn output_pair(
     match out {
         PseudoTransactionOutput::PostAlonzo(p) => {
             if p.datum_option.is_some() {
-                return Err(ValidationError::Mismatch("unexpected datum_option in output"));
+                return Err(ValidationError::Mismatch(
+                    "unexpected datum_option in output",
+                ));
             }
             if p.script_ref.is_some() {
                 return Err(ValidationError::Mismatch("unexpected script_ref in output"));
@@ -148,9 +257,7 @@ pub fn output_pair(
             };
             Ok((p.address.as_ref(), coin))
         }
-        PseudoTransactionOutput::Legacy(_) => {
-            Err(ValidationError::Mismatch("legacy output shape"))
-        }
+        PseudoTransactionOutput::Legacy(_) => Err(ValidationError::Mismatch("legacy output shape")),
     }
 }
 
@@ -282,7 +389,7 @@ pub fn anchor_matches_parts(
     }
 }
 
-/// blake2b-224 (28-byte) digest — the Cardano credential-hash function
+/// blake2b-224 (28-byte) digest: the Cardano credential-hash function
 /// used to derive a key hash (pool id, DRep id, key credential) from a
 /// 32-byte Ed25519 verification key.
 pub fn blake2b224(bytes: &[u8]) -> [u8; 28] {
@@ -432,7 +539,10 @@ mod tests {
         let mut b = clean_body();
         b.donation = Some(pallas_primitives::PositiveCoin::try_from(1u64).unwrap());
         let err = assert_no_extra_fields_inner(&b, false, false).unwrap_err();
-        assert!(matches!(err, ValidationError::Mismatch("unexpected donation")));
+        assert!(matches!(
+            err,
+            ValidationError::Mismatch("unexpected donation")
+        ));
     }
 
     #[test]
@@ -442,9 +552,15 @@ mod tests {
         // A bare voting_procedures presence is enough; build a trivial one.
         use pallas_codec::utils::NonEmptyKeyValuePairs;
         use pallas_primitives::conway::{GovActionId, Vote, Voter, VotingProcedure};
-        let vp = VotingProcedure { vote: Vote::Yes, anchor: Nullable::Null };
+        let vp = VotingProcedure {
+            vote: Vote::Yes,
+            anchor: Nullable::Null,
+        };
         let inner = NonEmptyKeyValuePairs::Def(vec![(
-            GovActionId { transaction_id: Hash::from([1u8; 32]), action_index: 0 },
+            GovActionId {
+                transaction_id: Hash::from([1u8; 32]),
+                action_index: 0,
+            },
             vp,
         )]);
         let voter = Voter::DRepKey(Hash::from([2u8; 28]));
@@ -458,7 +574,10 @@ mod tests {
         let mut b = clean_body();
         b.network_id = Some(NetworkId::Testnet);
         let err = assert_no_extra_fields_inner(&b, false, false).unwrap_err();
-        assert!(matches!(err, ValidationError::Mismatch("network_id must be mainnet")));
+        assert!(matches!(
+            err,
+            ValidationError::Mismatch("network_id must be mainnet")
+        ));
     }
 
     #[test]
@@ -485,7 +604,10 @@ mod tests {
         }];
         let err = assert_inputs_bind_to_request(&body_inputs, &[dummy_utxo_input()], PAYMENT_ADDR)
             .unwrap_err();
-        assert!(matches!(err, ValidationError::Mismatch("input index out of range")));
+        assert!(matches!(
+            err,
+            ValidationError::Mismatch("input index out of range")
+        ));
     }
 
     #[test]
@@ -509,7 +631,10 @@ mod tests {
             },
         );
         let err = output_pair(&out).unwrap_err();
-        assert!(matches!(err, ValidationError::Mismatch("unexpected datum_option in output")));
+        assert!(matches!(
+            err,
+            ValidationError::Mismatch("unexpected datum_option in output")
+        ));
     }
 
     #[test]
@@ -529,7 +654,104 @@ mod tests {
             },
         );
         let err = output_pair(&out).unwrap_err();
-        assert!(matches!(err, ValidationError::Mismatch("unexpected script_ref in output")));
+        assert!(matches!(
+            err,
+            ValidationError::Mismatch("unexpected script_ref in output")
+        ));
+    }
+
+    #[test]
+    fn mainnet_slot_follows_the_shelley_anchor() {
+        // Slot 4 492 800 began at the Shelley hard fork, 1 596 059 091.
+        assert_eq!(mainnet_slot_at(1_596_059_091), 4_492_800);
+        assert_eq!(mainnet_slot_at(1_596_059_092), 4_492_801);
+        assert_eq!(mainnet_slot_at(0), 0);
+    }
+
+    #[test]
+    fn ttl_window_is_three_hours_past_the_signer_clock() {
+        let now = 1_790_000_000;
+        let now_slot = mainnet_slot_at(now);
+        // Two hours ahead, what the online tools build: accepted.
+        assert_ttl_within_window(now_slot + 7_200, now).unwrap();
+        // Exactly at the limit: accepted.
+        assert_ttl_within_window(now_slot + MAX_TTL_AHEAD_SLOTS, now).unwrap();
+        // One slot past it, or years ahead: refused.
+        assert!(matches!(
+            assert_ttl_within_window(now_slot + MAX_TTL_AHEAD_SLOTS + 1, now).unwrap_err(),
+            ValidationError::Mismatch("ttl too far past the signer's clock")
+        ));
+        assert!(assert_ttl_within_window(u64::MAX, now).is_err());
+        // A TTL already behind the clock is not this check's business.
+        assert_ttl_within_window(now_slot - 10, now).unwrap();
+    }
+
+    #[test]
+    fn fee_ceiling_is_inclusive() {
+        assert_fee_within_ceiling(0).unwrap();
+        assert_fee_within_ceiling(170_000).unwrap();
+        assert_fee_within_ceiling(MAX_FEE_LOVELACE).unwrap();
+        let err = assert_fee_within_ceiling(MAX_FEE_LOVELACE + 1).unwrap_err();
+        assert!(matches!(
+            err,
+            ValidationError::Mismatch("fee above the signer's ceiling")
+        ));
+    }
+
+    #[test]
+    fn payment_key_binding_checks_only_the_payment_credential() {
+        use pallas_addresses::{
+            Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart,
+        };
+        use pallas_crypto::hash::Hash as CHash;
+        let own = [0x11u8; 32];
+        let other = [0x33u8; 32];
+        let kh = |v: &[u8; 32]| CHash::<28>::from(blake2b224(v));
+        let addr = |pay: ShelleyPaymentPart, del: ShelleyDelegationPart| {
+            ShelleyAddress::new(Network::Mainnet, pay, del)
+                .to_bech32()
+                .unwrap()
+        };
+        // Own key, enterprise form: a separate fee address with its own key.
+        let enterprise = addr(
+            ShelleyPaymentPart::key_hash(kh(&own)),
+            ShelleyDelegationPart::Null,
+        );
+        assert_payment_key_controls_address(&own, &enterprise).unwrap();
+        // Own key with any stake part, own or foreign.
+        let base = addr(
+            ShelleyPaymentPart::key_hash(kh(&own)),
+            ShelleyDelegationPart::key_hash(kh(&[0x22; 32])),
+        );
+        assert_payment_key_controls_address(&own, &base).unwrap();
+        // Another payment key: refused, whatever the stake part.
+        let foreign = addr(
+            ShelleyPaymentPart::key_hash(kh(&other)),
+            ShelleyDelegationPart::key_hash(kh(&[0x22; 32])),
+        );
+        let err = assert_payment_key_controls_address(&own, &foreign).unwrap_err();
+        assert!(matches!(
+            err,
+            ValidationError::Mismatch(
+                "payment address is not controlled by this signer's payment key"
+            )
+        ));
+        // A script address whose hash equals the key hash is still refused.
+        let script = addr(
+            ShelleyPaymentPart::script_hash(kh(&own)),
+            ShelleyDelegationPart::Null,
+        );
+        assert!(matches!(
+            assert_payment_key_controls_address(&own, &script).unwrap_err(),
+            ValidationError::Mismatch("payment address is script-controlled")
+        ));
+        // A stake address or garbage is not a payment address.
+        assert!(assert_payment_key_controls_address(
+            &own,
+            "stake1uyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq28lj8u"
+        )
+        .is_err());
+        assert!(assert_payment_key_controls_address(&own, "not-an-address").is_err());
     }
 
     #[test]

@@ -76,7 +76,11 @@ pub fn build_pairing_info_response(
         Some(hex_str) => match crate::crypto::key_from_hex(hex_str) {
             Ok(peer_pub) => {
                 let fp = crate::crypto::fingerprint(&own_pub, &peer_pub);
-                (true, Some(hex_str.to_string()), Some(crate::crypto::fingerprint_display(&fp)))
+                (
+                    true,
+                    Some(hex_str.to_string()),
+                    Some(crate::crypto::fingerprint_display(&fp)),
+                )
             }
             Err(_) => (false, None, None),
         },

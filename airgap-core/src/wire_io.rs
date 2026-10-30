@@ -6,8 +6,6 @@
 use crate::crypto::KEY_LEN;
 use crate::error::ErrorEnvelope;
 
-/// Encode an encrypted payload as UR fragments. UR encoding only fails on
-/// impossible inputs from this side, so failures surface as Internal.
 /// Translate a QrError::TypeMismatch into a user-actionable envelope.
 /// A mismatched UR type tag almost always means one side is on a newer
 /// (or older) protocol version than the other, so the actionable
@@ -15,10 +13,12 @@ use crate::error::ErrorEnvelope;
 fn tag_mismatch_envelope(expected: &str, got: &str) -> ErrorEnvelope {
     tracing::error!(expected = %expected, got = %got, "UR tag mismatch (version skew?)");
     ErrorEnvelope::invalid(
-        "this UR fragment was produced by a different version of these tools — upgrade both the online tool and the signer to matching releases",
+        "this UR fragment was produced by a different version of these tools. Upgrade both the online tool and the signer to matching releases",
     )
 }
 
+/// Encode an encrypted payload as UR fragments. UR encoding only fails on
+/// impossible inputs from this side, so failures surface as Internal.
 pub fn ur_encode(
     plaintext: &[u8],
     peer_pk: &[u8; KEY_LEN],

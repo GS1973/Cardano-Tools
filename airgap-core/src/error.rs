@@ -6,8 +6,8 @@
 //! description for display. Status code is derived from `code` in one
 //! central mapping so handlers never reach for raw HTTP status numbers.
 
-use axum::Json;
 use axum::response::{IntoResponse, Response};
+use axum::Json;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -49,15 +49,15 @@ impl ErrorCode {
     pub fn status(self) -> http::StatusCode {
         use http::StatusCode as S;
         match self {
-            Self::NotConfigured       => S::PRECONDITION_FAILED,
-            Self::NotPaired           => S::PRECONDITION_REQUIRED,
+            Self::NotConfigured => S::PRECONDITION_FAILED,
+            Self::NotPaired => S::PRECONDITION_REQUIRED,
             Self::UpstreamUnavailable => S::BAD_GATEWAY,
-            Self::SnapshotNotReady    => S::SERVICE_UNAVAILABLE,
-            Self::InsufficientFunds   => S::CONFLICT,
-            Self::NoRewards           => S::CONFLICT,
-            Self::InvalidInput        => S::BAD_REQUEST,
-            Self::SubmitRejected      => S::BAD_GATEWAY,
-            Self::Internal            => S::INTERNAL_SERVER_ERROR,
+            Self::SnapshotNotReady => S::SERVICE_UNAVAILABLE,
+            Self::InsufficientFunds => S::CONFLICT,
+            Self::NoRewards => S::CONFLICT,
+            Self::InvalidInput => S::BAD_REQUEST,
+            Self::SubmitRejected => S::BAD_GATEWAY,
+            Self::Internal => S::INTERNAL_SERVER_ERROR,
         }
     }
 }
@@ -72,7 +72,10 @@ pub struct ErrorEnvelope {
 
 impl ErrorEnvelope {
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
-        Self { code, message: message.into() }
+        Self {
+            code,
+            message: message.into(),
+        }
     }
 
     pub fn not_configured(message: impl Into<String>) -> Self {
@@ -118,10 +121,7 @@ mod tests {
     fn serializes_with_snake_case_code() {
         let env = ErrorEnvelope::not_paired("pair first");
         let json = serde_json::to_string(&env).unwrap();
-        assert_eq!(
-            json,
-            r#"{"code":"not_paired","message":"pair first"}"#,
-        );
+        assert_eq!(json, r#"{"code":"not_paired","message":"pair first"}"#,);
     }
 
     #[test]
@@ -135,9 +135,18 @@ mod tests {
 
     #[test]
     fn intentional_status_shares() {
-        assert_eq!(ErrorCode::InsufficientFunds.status(), http::StatusCode::CONFLICT);
+        assert_eq!(
+            ErrorCode::InsufficientFunds.status(),
+            http::StatusCode::CONFLICT
+        );
         assert_eq!(ErrorCode::NoRewards.status(), http::StatusCode::CONFLICT);
-        assert_eq!(ErrorCode::UpstreamUnavailable.status(), http::StatusCode::BAD_GATEWAY);
-        assert_eq!(ErrorCode::SubmitRejected.status(), http::StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            ErrorCode::UpstreamUnavailable.status(),
+            http::StatusCode::BAD_GATEWAY
+        );
+        assert_eq!(
+            ErrorCode::SubmitRejected.status(),
+            http::StatusCode::BAD_GATEWAY
+        );
     }
 }

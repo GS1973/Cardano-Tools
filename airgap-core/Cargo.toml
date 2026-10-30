@@ -1,8 +1,8 @@
 [package]
 name = "airgap-core"
-version = "1.1.0"
+version = "1.3.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 authors = ["Smit Blockchain Operations (Pool BKIND) <developmentbkind@gmail.com>"]
 description = "Role-neutral air-gapped transport + Cardano primitives shared by SPO Tools, DREP Tools, and Wallet Tools."
@@ -24,6 +24,8 @@ getrandom = "0.2"
 http = "1"
 axum = "0.8"
 zeroize = { version = "1", features = ["derive"] }
+ed25519-dalek = "2"
+tokio = { version = "1", features = ["rt", "time"] }
 
 # Cardano building blocks for the role-neutral transaction + validation
 # primitives (tx assembly, body decode, forbidden-field guard). Both tools

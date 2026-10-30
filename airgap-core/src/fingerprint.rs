@@ -16,8 +16,8 @@
 use blake2::digest::{Update, VariableOutput};
 use blake2::Blake2bVar;
 
-/// Truncated blake2b-256 over the canonical request bytes. 8 bytes —
-/// half the width of the 16-byte pairing fingerprint — gives 2^64
+/// Truncated blake2b-256 over the canonical request bytes. 8 bytes,
+/// half the width of the 16-byte pairing fingerprint, gives 2^64
 /// search space: enough to defeat any realistic on-the-fly forgery
 /// while staying short enough for an operator to visually compare in
 /// one glance.
@@ -25,7 +25,9 @@ pub fn request_fingerprint(json_bytes: &[u8]) -> [u8; 8] {
     let mut hasher = Blake2bVar::new(32).expect("blake2b 256 init");
     Update::update(&mut hasher, json_bytes);
     let mut full = [0u8; 32];
-    hasher.finalize_variable(&mut full).expect("blake2b finalize");
+    hasher
+        .finalize_variable(&mut full)
+        .expect("blake2b finalize");
     let mut out = [0u8; 8];
     out.copy_from_slice(&full[..8]);
     out
@@ -74,8 +76,8 @@ mod tests {
 
     /// Cross-implementation known-answer vectors. The expected bytes were
     /// produced independently by Python's `hashlib.blake2b(data,
-    /// digest_size=32)` — a different BLAKE2b implementation than the
-    /// `blake2` crate used here — so this pins the byte-exact output of the
+    /// digest_size=32)`, a different BLAKE2b implementation than the
+    /// `blake2` crate used here, so this pins the byte-exact output of the
     /// request-fingerprint contract that the online tool and the signer must
     /// agree on. A change to the hash, the digest length, or the truncation
     /// that the relational tests above would not catch is caught here.
@@ -86,7 +88,7 @@ mod tests {
         assert_eq!(fp, [0xb7, 0x52, 0x4b, 0x42, 0x64, 0xc4, 0x21, 0xe0]);
         assert_eq!(format_fingerprint(&fp), "b752-4b42-64c4-21e0");
 
-        // blake2b-256("")[..8] — the canonical empty-input BLAKE2b-256 prefix.
+        // blake2b-256("")[..8]: the canonical empty-input BLAKE2b-256 prefix.
         let empty = request_fingerprint(b"");
         assert_eq!(empty, [0x0e, 0x57, 0x51, 0xc0, 0x26, 0xe5, 0x43, 0xb2]);
         assert_eq!(format_fingerprint(&empty), "0e57-51c0-26e5-43b2");

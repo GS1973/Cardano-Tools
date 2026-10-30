@@ -8,9 +8,9 @@
 //! the body it received and refuses to sign on a mismatch.
 //!
 //! Request-bound on three axes, each domain-separated:
-//!   * `kind` — a withdrawal proof does not satisfy a DRep verifier.
-//!   * `built_at_unix` — a stale proof from a prior request does not match.
-//!   * `body_fp` — a proof for one request body does not match a different
+//!   * `kind`: a withdrawal proof does not satisfy a DRep verifier.
+//!   * `built_at_unix`: a stale proof from a prior request does not match.
+//!   * `body_fp`: a proof for one request body does not match a different
 //!     body.
 //!
 //! What this layer does and does not defend against:
@@ -25,16 +25,16 @@
 //!   * It is NOT code-enforced body integrity against an attacker. Every
 //!     preimage input except the PIN (kind, built_at_unix, the body that
 //!     body_fp is computed from) travels inside the request, so anyone who
-//!     can read one request — e.g. after the static channel secret leaks
-//!     from disk — can enumerate all 10^4 PINs offline against the observed
+//!     can read one request, e.g. after the static channel secret leaks
+//!     from disk, can enumerate all 10^4 PINs offline against the observed
 //!     proof, recover the PIN in microseconds, and then mint a valid proof
 //!     for any swapped body. A salt would not change this: it would have to
 //!     ship with the request too. No hash construction over a 4-digit
 //!     secret and on-the-wire inputs can resist an offline attacker.
 //!
 //! The only defence against a body swap by an attacker who holds the
-//! channel secret — or against a fully compromised online tool, which sees
-//! the PIN directly — is the operator's out-of-band visual fingerprint
+//! channel secret (or against a fully compromised online tool, which sees
+//! the PIN directly) is the operator's out-of-band visual fingerprint
 //! comparison against the signer's decrypted preview.
 
 use blake2::digest::{Update, VariableOutput};
@@ -42,7 +42,7 @@ use blake2::Blake2bVar;
 
 /// Bytes of the truncated proof. 8 bytes (2^64) makes blindly guessing a
 /// proof value infeasible, but the secret it attests is only a 4-digit
-/// PIN — a 10^4 space, recoverable offline by anyone who observes one
+/// PIN: a 10^4 space, recoverable offline by anyone who observes one
 /// valid proof (see module docs). The PIN is a proof of operator
 /// *presence* (re-typed on the signer), not a brute-force-resistant
 /// secret; `verify_pin` is constant-time.
@@ -68,7 +68,9 @@ pub fn pin_proof_hex(pin: &str, kind: &str, built_at_unix: u64, body_fp: &[u8]) 
     Update::update(&mut hasher, &(pin.len() as u64).to_be_bytes());
     Update::update(&mut hasher, pin.as_bytes());
     let mut full = [0u8; 32];
-    hasher.finalize_variable(&mut full).expect("blake2b finalize");
+    hasher
+        .finalize_variable(&mut full)
+        .expect("blake2b finalize");
     let mut truncated = [0u8; PIN_PROOF_LEN];
     truncated.copy_from_slice(&full[..PIN_PROOF_LEN]);
     hex::encode(truncated)
@@ -146,8 +148,18 @@ mod tests {
     #[test]
     fn different_body_fp_diverge() {
         assert_ne!(
-            pin_proof_hex("1234", "withdrawal", 1700000000, b"\x01\x02\x03\x04\x05\x06\x07\x08"),
-            pin_proof_hex("1234", "withdrawal", 1700000000, b"\x08\x07\x06\x05\x04\x03\x02\x01")
+            pin_proof_hex(
+                "1234",
+                "withdrawal",
+                1700000000,
+                b"\x01\x02\x03\x04\x05\x06\x07\x08"
+            ),
+            pin_proof_hex(
+                "1234",
+                "withdrawal",
+                1700000000,
+                b"\x08\x07\x06\x05\x04\x03\x02\x01"
+            )
         );
     }
 
@@ -183,7 +195,13 @@ mod tests {
     #[test]
     fn verify_rejects_wrong_body_fp() {
         let proof = pin_proof_hex("4321", "kes_rotation", 42, FP);
-        assert!(!verify_pin("4321", "kes_rotation", 42, b"\xff\xff\xff\xff\xff\xff\xff\xff", &proof));
+        assert!(!verify_pin(
+            "4321",
+            "kes_rotation",
+            42,
+            b"\xff\xff\xff\xff\xff\xff\xff\xff",
+            &proof
+        ));
     }
 
     #[test]
@@ -217,12 +235,18 @@ mod tests {
     /// be64(built_at) ‖ be64(len body_fp) ‖ body_fp ‖ be64(len pin) ‖ pin).
     /// They pin the byte-exact proof contract shared by the online tool
     /// (which builds the proof) and the signer (which verifies it): a silent
-    /// change to PIN_DOMAIN, the field order, or the truncation width — none
-    /// of which the relational tests above would catch — is caught here.
+    /// change to PIN_DOMAIN, the field order, or the truncation width, none
+    /// of which the relational tests above would catch, is caught here.
     #[test]
     fn known_answer_vectors() {
-        assert_eq!(pin_proof_hex("1234", "withdrawal", 1_700_000_000, FP), "0609cf5c27c7d0d4");
-        assert_eq!(pin_proof_hex("4321", "kes_rotation", 42, FP), "9c521709410343b6");
+        assert_eq!(
+            pin_proof_hex("1234", "withdrawal", 1_700_000_000, FP),
+            "0609cf5c27c7d0d4"
+        );
+        assert_eq!(
+            pin_proof_hex("4321", "kes_rotation", 42, FP),
+            "9c521709410343b6"
+        );
         assert_eq!(pin_proof_hex("0000", "vote", 0, FP), "27beed34193d8f15");
     }
 }

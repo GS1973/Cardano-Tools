@@ -1,0 +1,20 @@
+[package]
+name = "airgap-fetch-guard"
+version = "1.1.0"
+edition = "2021"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+authors = ["Smit Blockchain Operations (Pool BKIND) <developmentbkind@gmail.com>"]
+description = "Guarded fetch of an operator-supplied document URL, shared by the online tools of SPO Tools and DRep Tools."
+
+# A crate of its own, next to airgap-core rather than inside it: it needs an
+# HTTP client, and airgap-core is also linked into the air-gapped signers,
+# which must not carry one. Only the online tools depend on this crate.
+
+[dependencies]
+airgap-core = { path = ".." }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+tokio = { version = "1", features = ["net"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "net", "io-util"] }

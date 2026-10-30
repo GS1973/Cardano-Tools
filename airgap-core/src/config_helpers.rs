@@ -1,8 +1,8 @@
 //! Shared config-handling helpers used by both binaries.
 //!
 //! Each binary keeps its own typed config struct (`OnlineConfig` /
-//! `SignerConfig`) but the X25519 keypair extraction logic is identical
-//! — both store `own_crypto_skey_hex` and `peer_crypto_pubkey_hex` as
+//! `SignerConfig`) but the X25519 keypair extraction logic is identical,
+//! both store `own_crypto_skey_hex` and `peer_crypto_pubkey_hex` as
 //! optional 64-char hex strings, and both want the same `(sk, pk)`
 //! tuple back. This module factors out the parse-and-pair step.
 
@@ -75,10 +75,7 @@ mod tests {
 /// permissions on every subsequent save. Use for state-files and
 /// config-files that contain operator metadata (paths, hex secrets,
 /// hashes) the attacker should not enumerate.
-pub fn save_secure<T: serde::Serialize>(
-    path: &std::path::Path,
-    value: &T,
-) -> std::io::Result<()> {
+pub fn save_secure<T: serde::Serialize>(path: &std::path::Path, value: &T) -> std::io::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
@@ -133,9 +130,7 @@ pub fn save_secure<T: serde::Serialize>(
 /// `None`. Hand-edited config files often have `"peer_crypto_pubkey_hex": ""`
 /// after a clear-pairing flow that did not also remove the key; treating
 /// that as `Some("")` makes downstream `paired` checks ambiguous.
-pub fn deserialize_empty_string_as_none<'de, D>(
-    deserializer: D,
-) -> Result<Option<String>, D::Error>
+pub fn deserialize_empty_string_as_none<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {

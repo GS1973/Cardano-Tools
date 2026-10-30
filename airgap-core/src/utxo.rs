@@ -3,7 +3,7 @@
 //! The signer cannot independently see the chain. To validate that the
 //! body's TransactionInputs were chosen from the operator's own payment
 //! address (not, say, from a separate base-form pledge address that
-//! shares the same payment.skey — see SECURITY.md "Assumptions"), the
+//! shares the same payment.skey: see SECURITY.md "Assumptions"), the
 //! online tool sends the inputs alongside the body. The signer's
 //! tx_validator then cross-checks two things:
 //!
@@ -12,10 +12,11 @@
 //! 2. every `request.inputs[i].address` equals the request's
 //!    `payment_address_bech32`.
 //!
-//! Architectural limit: a compromised online tool can lie about the
-//! `address` field (signer is air-gapped, cannot consult the chain).
-//! The signer-UI surfaces inputs prominently with a red label on
-//! address-mismatch so the operator notices visually.
+//! A request whose inputs name another address is refused outright.
+//! Architectural limit: a compromised online tool can still lie about the
+//! `address` field (the signer is air-gapped and cannot consult the
+//! chain), so the signer screen lists every input with its full tx hash,
+//! index and amount for the operator to compare.
 
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DisplayFromStr};
@@ -31,7 +32,7 @@ pub struct UtxoInput {
     pub tx_hash_hex: String,
     pub tx_index: u32,
     /// Lovelace at this UTxO. Wire-encoded as string (industry pattern
-    /// for Cardano/NEAR/Solana — JS Number loses precision >2^53).
+    /// for Cardano/NEAR/Solana: JS Number loses precision >2^53).
     #[serde_as(as = "DisplayFromStr")]
     #[ts(type = "string")]
     pub amount_lovelace: u64,

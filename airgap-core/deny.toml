@@ -19,7 +19,8 @@ yanked = "deny"
 # No advisories ignored. airgap-core's tree carries none of the Amaru
 # vendored-crate advisories the tools accept; if a real advisory surfaces
 # here it must be triaged, not pre-silenced. Enforced by the `cargo deny
-# check` CI job (.github/workflows/ci.yml) on every push and pull request.
+# check` CI job (the monorepo's .github/workflows/ci.yml) on every push and
+# pull request.
 ignore = []
 
 [bans]
@@ -61,7 +62,7 @@ allow = [
 confidence-threshold = 0.8
 
 [sources]
-# airgap-core has no git or vendored path dependencies — every crate comes
+# airgap-core has no git or vendored path dependencies: every crate comes
 # from crates.io.
 unknown-registry = "deny"
 unknown-git = "deny"

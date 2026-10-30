@@ -29,18 +29,21 @@ pub struct CsrfConfig {
 impl CsrfConfig {
     pub fn for_listener(addr: SocketAddr) -> Self {
         let port = addr.port();
-        let mut allowed_hosts = vec![
-            format!("127.0.0.1:{port}"),
-            format!("localhost:{port}"),
-        ];
-        // `SocketAddr` displays as `127.0.0.1:8200` / `[::1]:8200` — the
+        let mut allowed_hosts = vec![format!("127.0.0.1:{port}"), format!("localhost:{port}")];
+        // `SocketAddr` displays as `127.0.0.1:8200` / `[::1]:8200`: the
         // same forms the browser puts in the Host header.
         let bound = addr.to_string();
         if !allowed_hosts.contains(&bound) {
             allowed_hosts.push(bound);
         }
-        let allowed_origins = allowed_hosts.iter().map(|h| format!("http://{h}")).collect();
-        Self { allowed_origins, allowed_hosts }
+        let allowed_origins = allowed_hosts
+            .iter()
+            .map(|h| format!("http://{h}"))
+            .collect();
+        Self {
+            allowed_origins,
+            allowed_hosts,
+        }
     }
 }
 
@@ -64,12 +67,16 @@ pub async fn csrf_guard(
         return Err(StatusCode::FORBIDDEN);
     }
     // Origin policy: if header is present it MUST match allowed_origins
-    // (regardless of method — a malicious tab can send GET requests too).
+    // (regardless of method: a malicious tab can send GET requests too).
     // If absent, only allow GET/HEAD: those are the only methods a
     // top-level navigation produces, and a top-level navigation does not
     // carry Origin. POST/PUT/DELETE without an Origin header is either a
     // misconfigured client or a forgery and is rejected.
-    match req.headers().get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
+    match req
+        .headers()
+        .get(header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+    {
         Some(o) => {
             if !cfg.allowed_origins.iter().any(|a| a == o) {
                 return Err(StatusCode::FORBIDDEN);
@@ -97,8 +104,12 @@ mod tests {
     #[test]
     fn for_listener_includes_both_loopback_forms() {
         let cfg = CsrfConfig::for_listener("127.0.0.1:8200".parse().unwrap());
-        assert!(cfg.allowed_origins.contains(&"http://127.0.0.1:8200".to_string()));
-        assert!(cfg.allowed_origins.contains(&"http://localhost:8200".to_string()));
+        assert!(cfg
+            .allowed_origins
+            .contains(&"http://127.0.0.1:8200".to_string()));
+        assert!(cfg
+            .allowed_origins
+            .contains(&"http://localhost:8200".to_string()));
         assert!(cfg.allowed_hosts.contains(&"127.0.0.1:8200".to_string()));
         assert!(cfg.allowed_hosts.contains(&"localhost:8200".to_string()));
     }
@@ -114,7 +125,9 @@ mod tests {
     fn for_listener_includes_bound_ipv6_form() {
         let cfg = CsrfConfig::for_listener("[::1]:8200".parse().unwrap());
         assert!(cfg.allowed_hosts.contains(&"[::1]:8200".to_string()));
-        assert!(cfg.allowed_origins.contains(&"http://[::1]:8200".to_string()));
+        assert!(cfg
+            .allowed_origins
+            .contains(&"http://[::1]:8200".to_string()));
         // The canonical forms stay available regardless of the bound IP.
         assert!(cfg.allowed_hosts.contains(&"127.0.0.1:8200".to_string()));
         assert!(cfg.allowed_hosts.contains(&"localhost:8200".to_string()));
@@ -124,7 +137,9 @@ mod tests {
     fn for_listener_includes_bound_nonstandard_loopback_form() {
         let cfg = CsrfConfig::for_listener("127.0.0.5:8200".parse().unwrap());
         assert!(cfg.allowed_hosts.contains(&"127.0.0.5:8200".to_string()));
-        assert!(cfg.allowed_origins.contains(&"http://127.0.0.5:8200".to_string()));
+        assert!(cfg
+            .allowed_origins
+            .contains(&"http://127.0.0.5:8200".to_string()));
     }
 
     #[test]
@@ -134,7 +149,9 @@ mod tests {
         assert_eq!(cfg.allowed_origins.len(), 2);
     }
 
-    async fn ok_handler() -> &'static str { "ok" }
+    async fn ok_handler() -> &'static str {
+        "ok"
+    }
 
     fn router_for(addr: &str) -> Router {
         Router::new()
@@ -163,7 +180,11 @@ mod tests {
     #[tokio::test]
     async fn rejects_get_with_wrong_origin() {
         let res = router()
-            .oneshot(req(Method::GET, "127.0.0.1:8200", Some("http://evil.example")))
+            .oneshot(req(
+                Method::GET,
+                "127.0.0.1:8200",
+                Some("http://evil.example"),
+            ))
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::FORBIDDEN);
@@ -190,7 +211,11 @@ mod tests {
     #[tokio::test]
     async fn allows_post_with_matching_origin() {
         let res = router()
-            .oneshot(req(Method::POST, "127.0.0.1:8200", Some("http://127.0.0.1:8200")))
+            .oneshot(req(
+                Method::POST,
+                "127.0.0.1:8200",
+                Some("http://127.0.0.1:8200"),
+            ))
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
@@ -199,7 +224,11 @@ mod tests {
     #[tokio::test]
     async fn rejects_post_with_wrong_origin() {
         let res = router()
-            .oneshot(req(Method::POST, "127.0.0.1:8200", Some("http://evil.example")))
+            .oneshot(req(
+                Method::POST,
+                "127.0.0.1:8200",
+                Some("http://evil.example"),
+            ))
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::FORBIDDEN);

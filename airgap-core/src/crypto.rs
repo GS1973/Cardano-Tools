@@ -10,9 +10,9 @@
 //!   `[24-byte nonce || XChaCha20-Poly1305(plaintext, key=KDF(ECDH(...)))]`
 //!
 //! Threat-model coverage:
-//!   * Passive observer of the QR channel — nothing useful in the bytes.
-//!   * Active QR substitution after pairing — AEAD tag fails to verify.
-//!   * MITM during pairing — fingerprint mismatch surfaces visually.
+//!   * Passive observer of the QR channel: nothing useful in the bytes.
+//!   * Active QR substitution after pairing: AEAD tag fails to verify.
+//!   * MITM during pairing: fingerprint mismatch surfaces visually.
 //!
 //! Out of scope: a fully compromised endpoint (the holder of the static
 //! secret can encrypt or decrypt by definition; the body validator in
@@ -37,7 +37,8 @@ pub const KEY_LEN: usize = 32;
 pub const NONCE_LEN: usize = 24;
 /// Length of the AEAD tag (Poly1305) in bytes.
 pub const TAG_LEN: usize = 16;
-/// Bytes prepended to every wire frame: 24-byte nonce.
+/// Bytes every wire frame adds to its plaintext: the 24-byte nonce in
+/// front and the 16-byte Poly1305 tag after the ciphertext.
 pub const WIRE_OVERHEAD: usize = NONCE_LEN + TAG_LEN;
 /// Length of the human-comparable fingerprint, in bytes (32 hex chars,
 /// rendered as eight groups of four). 2^128 search-space puts realtime
@@ -60,19 +61,21 @@ pub enum CryptoError {
     Encrypt,
     #[error("AEAD decryption failed (wrong peer key, tampered ciphertext, or pairing mismatch)")]
     Decrypt,
-    #[error("ciphertext too short ({0} bytes; need at least {NONCE_LEN}+{TAG_LEN}={WIRE_OVERHEAD})")]
+    #[error(
+        "ciphertext too short ({0} bytes, need at least {NONCE_LEN}+{TAG_LEN}={WIRE_OVERHEAD})"
+    )]
     ShortCiphertext(usize),
     #[error("invalid key length: expected {KEY_LEN}, got {0}")]
     BadKeyLength(usize),
     #[error("invalid hex: {0}")]
     BadHex(String),
-    #[error("peer public key is low-order — rejected to prevent the all-zero shared-secret attack")]
+    #[error("peer public key is low-order: rejected to prevent the all-zero shared-secret attack")]
     LowOrderPeerPubkey,
 }
 
 /// A freshly-generated static X25519 keypair, ready to be persisted. The
 /// secret is held in a `Zeroizing` wrapper so the in-RAM copy is wiped when
-/// dropped; the caller persists it (hex, under a 0600 file — plaintext on
+/// dropped; the caller persists it (hex, under a 0600 file: plaintext on
 /// disk by design) and uses it to derive the channel AEAD key.
 pub struct GeneratedKeypair {
     pub secret: Zeroizing<[u8; KEY_LEN]>,
@@ -121,7 +124,6 @@ pub fn validate_peer_pubkey(
     Ok(())
 }
 
-
 /// Derive the channel AEAD key from ECDH(own_sk, peer_pk). Returned in a
 /// `Zeroizing` wrapper: the key carries the same authority as the static
 /// secret, so it gets the same wipe-on-drop treatment.
@@ -156,7 +158,13 @@ pub fn seal(
     let mut nonce_bytes = [0u8; NONCE_LEN];
     getrandom::getrandom(&mut nonce_bytes).map_err(|e| CryptoError::Entropy(e.to_string()))?;
     let ct = cipher
-        .encrypt(XNonce::from_slice(&nonce_bytes), Payload { msg: plaintext, aad })
+        .encrypt(
+            XNonce::from_slice(&nonce_bytes),
+            Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
         .map_err(|_| CryptoError::Encrypt)?;
     let mut out = Vec::with_capacity(NONCE_LEN + ct.len());
     out.extend_from_slice(&nonce_bytes);
@@ -202,7 +210,7 @@ pub fn fingerprint(p_a: &[u8; KEY_LEN], p_b: &[u8; KEY_LEN]) -> [u8; FINGERPRINT
 
 /// Derive the (paired, fingerprint_display) pair from the two
 /// hex-encoded keys stored in the binary's config. Returns
-/// `(false, None)` when either key is missing or unparseable —
+/// `(false, None)` when either key is missing or unparseable:
 /// matches the behaviour both binaries' setup responses expect when
 /// pairing has not been completed yet.
 pub fn pairing_status(
@@ -335,8 +343,8 @@ mod tests {
     #[test]
     fn fingerprint_display_groups_of_four() {
         let fp = [
-            0xa3, 0x7f, 0x2c, 0x91, 0x5b, 0xe2, 0xc8, 0xd4,
-            0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80,
+            0xa3, 0x7f, 0x2c, 0x91, 0x5b, 0xe2, 0xc8, 0xd4, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60,
+            0x70, 0x80,
         ];
         assert_eq!(
             fingerprint_display(&fp),
@@ -366,7 +374,7 @@ mod tests {
     #[test]
     fn rejects_low_order_peer_pubkey() {
         let alice = generate_keypair().unwrap();
-        // Curve25519 small-subgroup point — order 1, ECDH always 0.
+        // Curve25519 small-subgroup point: order 1, ECDH always 0.
         let evil = [0u8; 32];
         let err = validate_peer_pubkey(&evil, &alice.secret).unwrap_err();
         assert!(matches!(err, CryptoError::LowOrderPeerPubkey));

@@ -6,15 +6,15 @@
 //! them back into strings, which this module decodes into bytes.
 //!
 //! Multi-part / fountain encoding inside the `ur` crate handles robustness
-//! across animated frames — if a frame is missed, the receiver eventually
+//! across animated frames, if a frame is missed, the receiver eventually
 //! recovers from later frames.
 //!
 //! Two UR type tags are in active use:
 //!
-//!   * `spo-tools-action-v2` — operational payloads (withdrawal, leaderlog,
+//!   * `spo-tools-action-v2`: operational payloads (withdrawal, leaderlog,
 //!     drep, pool update, kes rotation). The body is sealed via
 //!     [`crate::crypto::seal`]: `nonce(24) || XChaCha20-Poly1305(plaintext)`.
-//!   * `spo-tools-pairing-v1` — one-shot pubkey-exchange payloads, plain
+//!   * `spo-tools-pairing-v1`: one-shot pubkey-exchange payloads, plain
 //!     bytes (the pubkey itself is public; physical co-presence + the
 //!     pairing fingerprint are what authenticate the channel).
 //!
@@ -202,7 +202,7 @@ pub fn decode_encrypted_parts(
 
 /// Wrap a pairing payload (typically a JSON blob carrying the pubkey) in
 /// UR fragments tagged `spo-tools-pairing-v1`. Pairing payloads are
-/// plaintext on purpose — pubkeys are public and the integrity check is
+/// plaintext on purpose: pubkeys are public and the integrity check is
 /// the visual fingerprint comparison the SPO performs after pairing.
 pub fn encode_pairing_payload(plaintext: &[u8]) -> Result<Vec<String>, QrError> {
     encode_with_tag(plaintext, UR_TYPE_PAIRING)
@@ -228,7 +228,8 @@ mod tests {
         let (alice_sk, alice_pk) = keypair();
         let (bob_sk, bob_pk) = keypair();
         let original = b"hello bob from alice";
-        let parts = encode_encrypted_payload(original, &bob_pk, &alice_sk, Direction::Request).expect("encode");
+        let parts = encode_encrypted_payload(original, &bob_pk, &alice_sk, Direction::Request)
+            .expect("encode");
         assert!(!parts.is_empty());
         let decoded = decode_encrypted_parts(&parts, &alice_pk, &bob_sk, Direction::Request)
             .expect("decode")
@@ -242,7 +243,8 @@ mod tests {
         let (bob_sk, bob_pk) = keypair();
         let alice_pk = crypto::public_from_secret(&alice_sk);
         let original: Vec<u8> = (0..2048).map(|i| (i % 256) as u8).collect();
-        let parts = encode_encrypted_payload(&original, &bob_pk, &alice_sk, Direction::Request).expect("encode");
+        let parts = encode_encrypted_payload(&original, &bob_pk, &alice_sk, Direction::Request)
+            .expect("encode");
         assert!(parts.len() > 1, "expected multi-part, got {}", parts.len());
         let decoded = decode_encrypted_parts(&parts, &alice_pk, &bob_sk, Direction::Request)
             .expect("decode")
@@ -255,8 +257,10 @@ mod tests {
         let (alice_sk, _alice_pk) = keypair();
         let (bob_sk, bob_pk) = keypair();
         let (_mallory_sk, mallory_pk) = keypair();
-        let parts = encode_encrypted_payload(b"private", &bob_pk, &alice_sk, Direction::Request).unwrap();
-        let err = decode_encrypted_parts(&parts, &mallory_pk, &bob_sk, Direction::Request).unwrap_err();
+        let parts =
+            encode_encrypted_payload(b"private", &bob_pk, &alice_sk, Direction::Request).unwrap();
+        let err =
+            decode_encrypted_parts(&parts, &mallory_pk, &bob_sk, Direction::Request).unwrap_err();
         assert!(matches!(err, QrError::Crypto(_)));
     }
 
@@ -277,7 +281,9 @@ mod tests {
     fn pairing_roundtrip() {
         let original = br#"{"role":"signer","pubkey_hex":"deadbeef"}"#;
         let parts = encode_pairing_payload(original).expect("encode");
-        let decoded = decode_pairing_parts(&parts).expect("decode").expect("complete");
+        let decoded = decode_pairing_parts(&parts)
+            .expect("decode")
+            .expect("complete");
         assert_eq!(decoded.as_slice(), original);
     }
 

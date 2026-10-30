@@ -16,7 +16,7 @@
 //! (withdrawal: Payment + RewardStake; drep: Payment + OwnerStake;
 //! pool_update: Payment + Cold + OwnerStake). The single shared enum
 //! keeps the wire format flat and the signer dispatcher simple, at the
-//! cost that the type system does not enforce per-feature subsets —
+//! cost that the type system does not enforce per-feature subsets:
 //! producing code is the gate. A future revision could split into
 //! three feature-specific enums to lift this into the type system; the
 //! cost is more wire types and more `From`-style boilerplate, so the
@@ -38,7 +38,7 @@ pub enum WitnessRole {
     /// same key as `OwnerStake`; the wire name stays distinct so the
     /// signer's preview can label the operation correctly.
     RewardStake,
-    /// Pool operator (cold) key — used only for pool registration /
+    /// Pool operator (cold) key: used only for pool registration /
     /// re-registration.
     Cold,
 }

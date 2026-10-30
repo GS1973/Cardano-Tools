@@ -10,10 +10,10 @@
 //! key role without re-implementing the same JSON+CBOR dance every time.
 //!
 //! Key types currently understood:
-//! - StakePoolSigningKey_ed25519 (cold key, 32-byte plain Ed25519 seed —
-//!   cardano-cli `node key-gen`. The extended 64-byte form (HD-derived or
-//!   mnemonic-export) is also accepted; only the first 32 bytes — the seed
-//!   half — are used.)
+//! - StakePoolSigningKey_ed25519 (cold key, 32-byte plain Ed25519 seed:
+//!   cardano-cli `node key-gen`. The 64-byte libsodium form, the seed
+//!   followed by its public key, is also accepted. Its public half must be
+//!   the key the seed derives, and only the seed is kept.)
 //! - VrfSigningKey_PraosVRF (VRF, 64-byte extended)
 //! - StakeSigningKeyShelley_ed25519 (stake, 32-byte plain Ed25519)
 //! - PaymentSigningKeyShelley_ed25519 (payment, 32-byte plain Ed25519)
@@ -21,13 +21,13 @@
 //!   extended BIP32-Ed25519, from a mnemonic wallet exported via
 //!   cardano-address + cardano-cli)
 //! - StakeExtendedSigningKeyShelley_ed25519_bip32 (stake, same form)
-//! - DRepSigningKey_ed25519 (DRep, 32-byte plain Ed25519 — cardano-cli
+//! - DRepSigningKey_ed25519 (DRep, 32-byte plain Ed25519: cardano-cli
 //!   `conway governance drep key-gen`)
 //! - DRepExtendedSigningKey_ed25519_bip32 (DRep, 128-byte extended
 //!   BIP32-Ed25519, from a mnemonic wallet derived at CIP-105 path
 //!   1852'/1815'/account'/3/0)
 //!
-//! KES (`KesSigningKey_ed25519_kes_2^6`) is not handled here — its
+//! KES (`KesSigningKey_ed25519_kes_2^6`) is not handled here: its
 //! multi-period structure is managed by the KES rotation module.
 
 use serde::Deserialize;
@@ -63,17 +63,26 @@ pub enum CardanoKey {
     /// scalar-based signing; `pubkey_32` is the public key embedded in
     /// the skey envelope, kept for an at-load integrity cross-check.
     /// Never fed to seed-based Ed25519.
-    PaymentExtended { esk_64: [u8; 64], pubkey_32: [u8; 32] },
+    PaymentExtended {
+        esk_64: [u8; 64],
+        pubkey_32: [u8; 32],
+    },
     /// Extended (BIP32-Ed25519) stake signing key from a mnemonic wallet.
     /// Same layout and handling as [`CardanoKey::PaymentExtended`].
-    StakeExtended { esk_64: [u8; 64], pubkey_32: [u8; 32] },
+    StakeExtended {
+        esk_64: [u8; 64],
+        pubkey_32: [u8; 32],
+    },
     /// Plain Ed25519 DRep signing key (32 bytes). Its verification key
     /// hashes (blake2b-224) to the DRep id used in governance certs and
     /// `Voter::DRepKey` votes.
     DRep { seed_32: [u8; 32] },
     /// Extended (BIP32-Ed25519) DRep signing key from a mnemonic wallet.
     /// Same layout and handling as [`CardanoKey::PaymentExtended`].
-    DRepExtended { esk_64: [u8; 64], pubkey_32: [u8; 32] },
+    DRepExtended {
+        esk_64: [u8; 64],
+        pubkey_32: [u8; 32],
+    },
 }
 
 impl CardanoKey {
@@ -98,8 +107,8 @@ impl CardanoKey {
             CardanoKey::PaymentExtended { .. }
             | CardanoKey::StakeExtended { .. }
             | CardanoKey::DRepExtended { .. } => unreachable!(
-                "seed_32() called on an extended (BIP32) key; extended keys have no \
-                 Ed25519 seed — sign via the esk_64 scalar path"
+                "seed_32() called on an extended (BIP32) key. Extended keys have no \
+                 Ed25519 seed: sign via the esk_64 scalar path"
             ),
         }
         s
@@ -145,13 +154,52 @@ pub enum KeyLoadError {
     #[error("cborHex payload length is {actual}, expected {expected}")]
     BadLength { expected: usize, actual: usize },
     #[error(
-        "cold key cborHex must be 32 or 64 bytes (header 5820 or 5840); got header 0x{got_hex}"
+        "cold key cborHex must be 32 or 64 bytes (header 5820 or 5840). Got header 0x{got_hex}"
     )]
     BadColdLength { got_hex: String },
+    #[error("cold key public half does not match its seed (corrupt skey?)")]
+    ColdPublicKeyMismatch,
     #[error("unsupported skey type: {0}")]
     UnsupportedType(String),
-    #[error("skey file is readable by group or other (mode 0o{mode:o}); chmod 600 before retrying")]
+    #[error(
+        "skey file is readable by group or other (mode 0o{mode:o}). Run chmod 600 before retrying"
+    )]
     InsecureMode { mode: u32 },
+}
+
+impl KeyLoadError {
+    /// A description of the failure that never echoes file content, for
+    /// anything that leaves the loader: a log line, an HTTP response, the
+    /// operator's screen. The `Display` text is for a developer at a
+    /// debugger; it can quote the file at a JSON parse position, the
+    /// offending character of a bad hex string, and the first two bytes of
+    /// what may be a raw key without its CBOR header. Every variant is
+    /// spelled out here, so a new one cannot slip through unredacted.
+    pub fn redacted(&self) -> String {
+        match self {
+            KeyLoadError::Io(io) => match io.kind() {
+                std::io::ErrorKind::NotFound => "file not found".into(),
+                std::io::ErrorKind::PermissionDenied => "permission denied".into(),
+                kind => format!("could not read skey file ({kind})"),
+            },
+            KeyLoadError::Json(_) => "file is not valid cardano-cli skey JSON".into(),
+            KeyLoadError::Hex(_) => "cborHex is not valid hex".into(),
+            KeyLoadError::BadCborHeader { expected, .. } => {
+                format!("cborHex does not start with the CBOR header of a {expected}-byte key")
+            }
+            KeyLoadError::BadLength { expected, actual } => {
+                format!("cborHex payload length is {actual}, expected {expected}")
+            }
+            KeyLoadError::BadColdLength { .. } => "cold key cborHex must be 32 or 64 bytes".into(),
+            KeyLoadError::ColdPublicKeyMismatch => {
+                "cold key public half does not match its seed (corrupt skey?)".into()
+            }
+            KeyLoadError::UnsupportedType(_) => "unsupported skey type".into(),
+            KeyLoadError::InsecureMode { mode } => format!(
+                "skey file is readable by group or other (mode 0o{mode:o}). Run chmod 600 before retrying"
+            ),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -170,8 +218,12 @@ struct SkeyFile {
 /// For these key sizes the expected header bytes are:
 ///   - 32 bytes payload → 0x58, 0x20
 ///   - 64 bytes payload → 0x58, 0x40
-fn decode_cbor_byte_string(cbor_hex: &str, expected: usize) -> Result<Zeroizing<Vec<u8>>, KeyLoadError> {
-    let raw = Zeroizing::new(hex::decode(cbor_hex.trim()).map_err(|e| KeyLoadError::Hex(e.to_string()))?);
+fn decode_cbor_byte_string(
+    cbor_hex: &str,
+    expected: usize,
+) -> Result<Zeroizing<Vec<u8>>, KeyLoadError> {
+    let raw =
+        Zeroizing::new(hex::decode(cbor_hex.trim()).map_err(|e| KeyLoadError::Hex(e.to_string()))?);
     if raw.len() < 2 || raw[0] != 0x58 || raw[1] as usize != expected {
         let got_hex = raw.iter().take(2).fold(String::new(), |mut acc, b| {
             use std::fmt::Write;
@@ -191,10 +243,13 @@ fn decode_cbor_byte_string(cbor_hex: &str, expected: usize) -> Result<Zeroizing<
 }
 
 /// Decode the cold-key cborHex, accepting either the 32-byte plain seed
-/// (header 5820) or the 64-byte extended form (header 5840). Returns the
-/// 32-byte signing seed in either case (first half of the extended form).
+/// (header 5820) or the 64-byte libsodium form (header 5840), the seed
+/// followed by its public key. The public half must be the key the seed
+/// derives, which catches a corrupted or spliced file at load. Returns the
+/// 32-byte signing seed in either case.
 fn decode_cold_seed(cbor_hex: &str) -> Result<[u8; 32], KeyLoadError> {
-    let raw = Zeroizing::new(hex::decode(cbor_hex.trim()).map_err(|e| KeyLoadError::Hex(e.to_string()))?);
+    let raw =
+        Zeroizing::new(hex::decode(cbor_hex.trim()).map_err(|e| KeyLoadError::Hex(e.to_string()))?);
     if raw.len() < 2 || raw[0] != 0x58 {
         let got_hex = raw.iter().take(2).fold(String::new(), |mut acc, b| {
             use std::fmt::Write;
@@ -206,7 +261,16 @@ fn decode_cold_seed(cbor_hex: &str) -> Result<[u8; 32], KeyLoadError> {
     let mut seed = [0u8; 32];
     match raw[1] {
         0x20 if raw.len() == 2 + 32 => seed.copy_from_slice(&raw[2..]),
-        0x40 if raw.len() == 2 + 64 => seed.copy_from_slice(&raw[2..2 + 32]),
+        0x40 if raw.len() == 2 + 64 => {
+            seed.copy_from_slice(&raw[2..2 + 32]);
+            let derived = ed25519_dalek::SigningKey::from_bytes(&seed)
+                .verifying_key()
+                .to_bytes();
+            if derived.as_slice() != &raw[2 + 32..] {
+                seed.zeroize();
+                return Err(KeyLoadError::ColdPublicKeyMismatch);
+            }
+        }
         _ => {
             let got_hex = raw.iter().take(2).fold(String::new(), |mut acc, b| {
                 use std::fmt::Write;
@@ -221,7 +285,7 @@ fn decode_cold_seed(cbor_hex: &str) -> Result<[u8; 32], KeyLoadError> {
 
 /// Decode a cardano-cli extended (BIP32-Ed25519) signing-key cborHex.
 /// The envelope is a 128-byte CBOR byte string (header 5880) laid out as
-/// `[ extended_secret(64) | public_key(32) | chain_code(32) ]` — the
+/// `[ extended_secret(64) | public_key(32) | chain_code(32) ]`: the
 /// cardano-crypto XPrv serialisation (offsets verified against
 /// `Cardano.Crypto.Wallet.Encrypted`: esk 0, pubkey 64, chaincode 96).
 /// Returns the 64-byte extended secret (kL‖kR) used for signing and the
@@ -246,13 +310,22 @@ fn decode_extended_key(cbor_hex: &str) -> Result<([u8; 64], [u8; 32]), KeyLoadEr
 /// check turns that into a clear up-front error instead of silently
 /// loading a world-readable secret.
 pub fn load_skey(path: &Path) -> Result<CardanoKey, KeyLoadError> {
+    use std::io::Read;
     use std::os::unix::fs::PermissionsExt;
-    let meta = std::fs::metadata(path)?;
+    // One open handle: the mode is read from the same file the key is read
+    // from, so the file cannot be swapped between the check and the read.
+    let mut f = std::fs::File::open(path)?;
+    let meta = f.metadata()?;
     let mode = meta.permissions().mode();
     if mode & 0o077 != 0 {
-        return Err(KeyLoadError::InsecureMode { mode: mode & 0o7777 });
+        return Err(KeyLoadError::InsecureMode {
+            mode: mode & 0o7777,
+        });
     }
-    let content = Zeroizing::new(std::fs::read_to_string(path)?);
+    // Sized up front so the buffer is not reallocated (and a partial copy of
+    // the key left behind in freed memory) while the file is read.
+    let mut content = Zeroizing::new(String::with_capacity(meta.len() as usize + 1));
+    f.read_to_string(&mut content)?;
     let file: SkeyFile = serde_json::from_str(&content)?;
     // Move the secret-bearing fields out of the deserialised struct into a
     // Zeroizing wrapper so the hex copy is wiped when this function returns,
@@ -316,6 +389,49 @@ mod tests {
     }
 
     #[test]
+    fn redacted_never_echoes_file_content() {
+        const MARK: &str = "c0ffee11";
+        let redacted_for = |json: &str| {
+            let f = write_temp(json);
+            load_skey(f.path())
+                .map(|_| ())
+                .expect_err("must reject")
+                .redacted()
+        };
+        // Not JSON: serde quotes the offending token in Display.
+        let m = redacted_for(&format!("{MARK} is not json"));
+        assert!(!m.contains(MARK), "{m}");
+        // A raw key without its CBOR header: Display quotes its first bytes.
+        let json = format!(
+            r#"{{"type":"PaymentSigningKeyShelley_ed25519","description":"","cborHex":"{MARK}{}"}}"#,
+            "ab".repeat(28)
+        );
+        let f = write_temp(&json);
+        let err = load_skey(f.path()).map(|_| ()).expect_err("must reject");
+        assert!(
+            err.to_string().contains("c0ff"),
+            "Display is the unredacted form: {err}"
+        );
+        assert!(!err.redacted().contains("c0ff"), "{}", err.redacted());
+        assert!(err.redacted().contains("CBOR header"));
+        // Not hex.
+        let m = redacted_for(
+            r#"{"type":"PaymentSigningKeyShelley_ed25519","description":"","cborHex":"5820zz"}"#,
+        );
+        assert_eq!(m, "cborHex is not valid hex");
+        // An unknown type label.
+        let m = redacted_for(&format!(
+            r#"{{"type":"{MARK}","description":"","cborHex":"5820"}}"#
+        ));
+        assert!(!m.contains(MARK), "{m}");
+        // A missing file.
+        let err = load_skey(std::path::Path::new("/nonexistent/x.skey"))
+            .map(|_| ())
+            .expect_err("missing");
+        assert_eq!(err.redacted(), "file not found");
+    }
+
+    #[test]
     fn parses_payment_skey() {
         let cbor_hex = format!("5820{}", "42".repeat(32));
         let json = format!(
@@ -360,13 +476,13 @@ mod tests {
     }
 
     #[test]
-    fn parses_cold_skey_64_byte_extended_form() {
-        // The extended 64-byte form (HD-derived or mnemonic-export) is
-        // accepted; only the first 32 bytes — the seed half — are used.
-        let mut hex_payload = String::new();
-        hex_payload.push_str(&"22".repeat(32));
-        hex_payload.push_str(&"33".repeat(32));
-        let cbor_hex = format!("5840{hex_payload}");
+    fn parses_cold_skey_64_byte_libsodium_form() {
+        // The 64-byte libsodium form is the seed followed by its public key;
+        // only the seed is kept.
+        let public = ed25519_dalek::SigningKey::from_bytes(&[0x22u8; 32])
+            .verifying_key()
+            .to_bytes();
+        let cbor_hex = format!("5840{}{}", "22".repeat(32), hex::encode(public));
         let json = format!(
             r#"{{"type":"StakePoolSigningKey_ed25519","description":"x","cborHex":"{cbor_hex}"}}"#
         );
@@ -378,6 +494,18 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_64_byte_cold_key_with_a_foreign_public_half_is_refused() {
+        let cbor_hex = format!("5840{}{}", "22".repeat(32), "33".repeat(32));
+        let json = format!(
+            r#"{{"type":"StakePoolSigningKey_ed25519","description":"x","cborHex":"{cbor_hex}"}}"#
+        );
+        let f = write_temp(&json);
+        assert!(matches!(
+            load_skey(f.path()),
+            Err(KeyLoadError::ColdPublicKeyMismatch)
+        ));
+    }
 
     #[test]
     fn parses_payment_extended_skey() {
@@ -456,7 +584,6 @@ mod tests {
         assert!(matches!(err, KeyLoadError::BadCborHeader { .. }));
     }
 
-
     #[test]
     fn accepts_unknown_extra_field_for_forward_compat() {
         // future cardano-cli might add a new top-level field. The parser keeps
@@ -471,9 +598,8 @@ mod tests {
     #[test]
     fn rejects_unknown_type() {
         let cbor_hex = format!("5820{}", "00".repeat(32));
-        let json = format!(
-            r#"{{"type":"SomeFutureKey_v9","description":"x","cborHex":"{cbor_hex}"}}"#
-        );
+        let json =
+            format!(r#"{{"type":"SomeFutureKey_v9","description":"x","cborHex":"{cbor_hex}"}}"#);
         let f = write_temp(&json);
         let err = load_skey(f.path()).expect_err("must reject");
         assert!(matches!(err, KeyLoadError::UnsupportedType(t) if t == "SomeFutureKey_v9"));

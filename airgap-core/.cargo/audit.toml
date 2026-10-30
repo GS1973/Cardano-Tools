@@ -5,7 +5,7 @@
 # curve25519-dalek 4.x). Nothing is ignored here on purpose: a real
 # advisory against this published library must be triaged, not silenced.
 # Keep in sync with the empty ignore list in deny.toml. Enforced by the
-# `cargo audit --deny warnings` CI job (.github/workflows/ci.yml).
+# `cargo audit --deny warnings` CI job (the monorepo's .github/workflows/ci.yml).
 
 [advisories]
 ignore = []
