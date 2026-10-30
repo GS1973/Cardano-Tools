@@ -287,6 +287,14 @@ security and to allow side-by-side instances. For a self-hosted mainnet
 Koios, add `--koios-url URL` (defaults to `https://api.koios.rest/api/v1`).
 The URL must be https, or plain http on the same machine.
 
+Both binaries listen on a loopback address only (127.0.0.0/8 or ::1) and
+refuse any other `--listen` address. The flag `--allow-non-loopback`
+overrides that refusal. Do not use it: the online tool holds Koios access
+and builds and submits transactions, the signer holds your keys, and
+neither has any authentication beyond the operator PIN. Anything that can
+reach the address can drive the tool. The flag exists only for a setup you
+have isolated yourself, and that is on you.
+
 Open the URL printed at startup and complete Setup with your DRep id and
 payment address. Saved to `~/.config/drep-tools/online.json`. The optional
 Koios API key field is attached as `Authorization: Bearer <key>` to every
