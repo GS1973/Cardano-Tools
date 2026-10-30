@@ -14,6 +14,11 @@ Each tool lives in its own subfolder and shares a common core:
   identity, refreshes it to stay active, and casts governance votes — every
   transaction is signed on an air-gapped machine so the keys never touch the
   network.
+- **[wallet-tools](wallet-tools/)** — Air-gapped wallet for holding and
+  moving funds under sole operator control. From an online client the holder
+  creates CLI-style addresses, sends and receives ada, and delegates stake to
+  a pool and to a DRep — every transaction is signed on an air-gapped machine
+  so the keys never touch the network.
 - **[airgap-core](airgap-core/)** — role-neutral transport and Cardano
   primitives shared by the tools: signing, key loading, CBOR transaction
   validation, QR/UR transport, and the online-to-signer pairing channel.
