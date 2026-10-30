@@ -149,7 +149,7 @@ this tool manages a key-based DRep only.
 Hardware-wallet owners are not supported. The signer
 works with CLI-exported keys only.
 
-## Limitations (v1.1)
+## Limitations (v1.4.0)
 
 - Linux, x86-64 and arm64. For x86-64, prebuilt binaries ship in two builds: a standard
   **glibc** build (modern distributions, glibc >= 2.34: Ubuntu 22.04+,
