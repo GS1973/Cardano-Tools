@@ -1,0 +1,60 @@
+# Wallet Tools: air-gapped Cardano CLI-key wallet.
+#
+# Air-gapped pair (wallet-online + wallet-signer) for managing a
+# Cardano payment wallet: building payments, delegating stake, and
+# deriving new addresses. Built entirely on the role-neutral
+# `airgap-core` library (shared with SPO Tools and DREP Tools, never
+# depending on either). The wallet signing key never touches a
+# networked machine.
+#
+# Workspace crates:
+#   shared:        wallet wire types + body validators
+#   wallet-online: internet-connected web app (Axum + Pallas + Koios)
+#   wallet-signer: air-gapped signing application (Pallas, no network)
+
+[workspace]
+resolver = "2"
+members = ["shared", "wallet-online", "wallet-signer"]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+authors = ["Smit Blockchain Operations (Pool BKIND) <developmentbkind@gmail.com>"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_with = "3"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net", "time"] }
+axum = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+pallas-primitives = "0.35"
+pallas-codec      = "0.35"
+pallas-crypto     = "0.35"
+pallas-addresses  = "0.35"
+
+ur = "0.4"
+zeroize = { version = "1", features = ["derive"] }
+
+# The shared role-neutral library: sibling repo, never SPO/DRep Tools.
+airgap-core = { path = "../airgap-core" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
+# Trap on integer overflow in release builds too, instead of silently
+# wrapping. Lovelace math (coin selection, fee = min_fee_a * size +
+# min_fee_b and min-ADA change from Koios-supplied coefficients,
+# deposit sums) must fail closed: a wrapped sum or product feeding a
+# fee, an output amount, or a funding decision is a correctness and
+# security fault, not a graceful degradation. The hot paths use
+# checked/saturating arithmetic; this is the backstop for anything
+# that slips through. airgap-core builds under this profile too.
+overflow-checks = true

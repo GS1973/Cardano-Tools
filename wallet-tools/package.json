@@ -1,0 +1,10 @@
+{
+  "name": "wallet-tools",
+  "private": true,
+  "author": "Smit Blockchain Operations (Pool BKIND) <developmentbkind@gmail.com>",
+  "workspaces": [
+    "shared-frontend",
+    "wallet-online/frontend",
+    "wallet-signer/frontend"
+  ]
+}

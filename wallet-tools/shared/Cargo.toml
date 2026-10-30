@@ -1,0 +1,29 @@
+[package]
+name = "shared"
+version = "1.4.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+airgap-core = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+serde_with.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+ts-rs = { version = "12", features = ["serde-compat", "serde-json-impl"] }
+
+pallas-primitives.workspace = true
+pallas-codec.workspace = true
+pallas-crypto.workspace = true
+pallas-addresses.workspace = true
+
+ur.workspace = true
+hex = "0.4"
+bech32 = "0.11"
+zeroize = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
