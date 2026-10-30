@@ -307,6 +307,14 @@ address prefixes, Shelley-era slot anchors), so pointing it at a
 preprod/preview Koios yields wrong timings and unsignable transactions.
 `RUST_LOG` overrides log filtering.
 
+Both binaries listen on a loopback address only (127.0.0.0/8 or ::1) and
+refuse any other `--listen` address. The flag `--allow-non-loopback`
+overrides that refusal. Do not use it: the online tool holds Koios access
+and builds and submits transactions, the signer holds your keys, and
+neither has any authentication beyond the operator PIN. Anything that can
+reach the address can drive the tool. The flag exists only for a setup you
+have isolated yourself, and that is on you.
+
 Open the URL printed at startup and complete Setup with your pool ID,
 payment address and reward-receive address. Saved to
 `~/.config/spo-tools/online.json`.
