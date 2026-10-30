@@ -11,10 +11,10 @@ Self-hosted, open source, Linux-only. No Docker, no SaaS, no mobile apps.
 
 **v1.4.0**: production-ready. Six operational features plus a
 rationale-witness step, body-level validation on the signer, and an
-end-to-end encrypted channel between online tool and signer. The six
-operational features are validated on Cardano mainnet against a live
-stake pool. The rationale-witness step is verified at component level,
-with a live vote carrying a witnessed rationale the remaining check.
+end-to-end encrypted channel between online tool and signer. All of it
+is validated on Cardano mainnet against a live stake pool, including a
+governance vote whose rationale carries the author witness signed on the
+air-gapped signer.
 
 ## Screenshots
 
