@@ -27,7 +27,9 @@ crates.io.
   (`signer_state`), signing-key material for plain and extended keys
   (`signing`), writing a new key file without ever overwriting one
   (`key_files`), the air-gap monitor (`airgap_monitor`) and the Setup
-  screen's directory browser (`list_dir`).
+  screen's directory browser (`list_dir`), the loopback-only listener
+  check (`listen`), the shared error type (`error`) and the config file
+  helpers (`config_helpers`).
 - **Fetch guard**: the classification of public versus internal addresses
   (`netguard`), and beside the core, in `fetch-guard/`, the
   `airgap-fetch-guard` crate: the one guarded HTTP client the online tools
