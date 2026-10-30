@@ -18,12 +18,11 @@ other's code. Both depend only on `airgap-core`.
 rationale-witness step (the CIP-100 author witness for a vote's CIP-136
 metadata),
 body-level validation on the signer, and an end-to-end encrypted channel
-between online tool and signer. Built and tested: builder↔validator
-round-trips for every operation, and an end-to-end sign-and-verify of both
-witnesses on the signer. The air-gap transport is the same one SPO Tools
-used to cast a real SPO governance vote on Cardano mainnet. The DRep
-mainnet end-to-end (register → vote → refresh), and a live vote carrying a
-witnessed rationale, are the remaining validation steps.
+between online tool and signer. Validated on Cardano mainnet with a
+live DRep: updates of the on-chain anchor, governance votes, and a vote
+whose rationale carries the author witness signed on the air-gapped
+signer. Register and retire are covered by builder↔validator round-trips
+and an end-to-end sign-and-verify of both witnesses on the signer.
 
 ## Screenshots
 
