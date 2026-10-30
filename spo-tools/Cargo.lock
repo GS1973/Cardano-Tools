@@ -23,7 +23,7 @@ dependencies = [
 
 [[package]]
 name = "airgap-core"
-version = "1.3.0"
+version = "1.4.0"
 dependencies = [
  "axum",
  "bech32 0.11.1",
@@ -51,7 +51,7 @@ dependencies = [
 
 [[package]]
 name = "airgap-fetch-guard"
-version = "1.1.0"
+version = "1.4.0"
 dependencies = [
  "airgap-core",
  "reqwest",
@@ -1567,7 +1567,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "online-tool"
-version = "1.1.3"
+version = "1.4.0"
 dependencies = [
  "airgap-fetch-guard",
  "axum",
@@ -2405,7 +2405,7 @@ dependencies = [
 
 [[package]]
 name = "shared"
-version = "1.1.3"
+version = "1.4.0"
 dependencies = [
  "airgap-core",
  "bech32 0.11.1",
@@ -2449,7 +2449,7 @@ dependencies = [
 
 [[package]]
 name = "signer"
-version = "1.1.3"
+version = "1.4.0"
 dependencies = [
  "amaru-kes-summed-ed25519",
  "amaru-vrf-dalek",
