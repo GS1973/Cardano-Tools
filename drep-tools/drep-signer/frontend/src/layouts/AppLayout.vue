@@ -41,10 +41,10 @@
           transaction before approving the signature.
         </p>
         <p class="text-body-1 mb-4" style="color: #FFFFFF;">
-          The air-gap indicator in the top bar reflects only IP-traffic on
+          The network indicator in the top bar reflects only IP-traffic on
           local interfaces. File transfer via VM shared folders, USB-passthrough,
           Bluetooth file-transfer (OBEX), or out-of-band management interfaces
-          is not detected — those remain your responsibility.
+          is not detected: those remain your responsibility.
         </p>
         <p class="text-body-1" style="color: #FFFFFF;">
           This machine holds your DRep signing key. Compromise of this machine
@@ -53,7 +53,7 @@
       </v-card-text>
       <v-card-actions class="pa-4">
         <v-spacer />
-        <v-btn color="primary" variant="tonal" @click="acknowledgeWarning">I understand — proceed</v-btn>
+        <v-btn color="primary" variant="tonal" @click="acknowledgeWarning">I understand: proceed</v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>

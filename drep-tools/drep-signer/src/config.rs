@@ -4,7 +4,7 @@
 //!
 //! Key-isolation by construction: this struct holds **only** the DRep key
 //! and a payment key (plus the X25519 pairing keys). There is no
-//! `cold_skey` field — this binary cannot name, let alone load, the pool
+//! `cold_skey` field: this binary cannot name, let alone load, the pool
 //! cold key. A compromise of this signer cannot reach the SPO role's keys.
 
 use serde::{Deserialize, Serialize};
@@ -16,26 +16,40 @@ use zeroize::{Zeroize, Zeroizing};
 pub struct SignerConfig {
     /// Path to the DRep signing key (`DRepSigningKey_ed25519` or the
     /// extended BIP32 form). The action authority for every operation.
-    #[serde(default, deserialize_with = "shared::config_helpers::deserialize_empty_string_as_none")]
+    #[serde(
+        default,
+        deserialize_with = "shared::config_helpers::deserialize_empty_string_as_none"
+    )]
     pub drep_skey: Option<String>,
     /// Path to the payment signing key that spends the fee input. May be
     /// the same key as the SPO tool uses, or a dedicated DRep-funding key.
-    #[serde(default, deserialize_with = "shared::config_helpers::deserialize_empty_string_as_none")]
+    #[serde(
+        default,
+        deserialize_with = "shared::config_helpers::deserialize_empty_string_as_none"
+    )]
     pub payment_skey: Option<String>,
 
     /// Hex-encoded X25519 secret key for the encrypted-channel layer.
     /// Generated locally on first boot, never leaves this machine.
-    #[serde(default, deserialize_with = "shared::config_helpers::deserialize_empty_string_as_none")]
+    #[serde(
+        default,
+        deserialize_with = "shared::config_helpers::deserialize_empty_string_as_none"
+    )]
     pub own_crypto_skey_hex: Option<String>,
     /// Hex-encoded X25519 public key of the paired online tool. Set during
     /// the pairing dance; cleared by re-pair. None means "not paired".
-    #[serde(default, deserialize_with = "shared::config_helpers::deserialize_empty_string_as_none")]
+    #[serde(
+        default,
+        deserialize_with = "shared::config_helpers::deserialize_empty_string_as_none"
+    )]
     pub peer_crypto_pubkey_hex: Option<String>,
 }
 
 pub fn config_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join(".config/drep-tools").join("signer.json")
+    PathBuf::from(home)
+        .join(".config/drep-tools")
+        .join("signer.json")
 }
 
 pub fn load(path: &Path) -> SignerConfig {
@@ -56,14 +70,14 @@ pub fn load_or_err() -> Result<SignerConfig, shared::error::ErrorEnvelope> {
         Ok(s) => serde_json::from_str(&s).map_err(|e| {
             tracing::error!(error = %e, "signer config file is corrupt");
             shared::error::ErrorEnvelope::internal(
-                "failed to load signer config — fix or remove the corrupt config file",
+                "failed to load signer config. Fix or remove the corrupt config file",
             )
         }),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(SignerConfig::default()),
         Err(e) => {
             tracing::error!(error = %e, "cannot read signer config");
             Err(shared::error::ErrorEnvelope::internal(
-                "failed to load signer config — cannot read the config file",
+                "failed to load signer config: cannot read the config file",
             ))
         }
     }
@@ -95,10 +109,10 @@ pub fn ensure_own_crypto_skey(
             }
             bytes.zeroize();
         }
-        // Stored value is corrupt — regenerate.
+        // Stored value is corrupt: regenerate.
     }
-    let kp = shared::crypto::generate_keypair()
-        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    let kp =
+        shared::crypto::generate_keypair().map_err(|e| std::io::Error::other(e.to_string()))?;
     c.own_crypto_skey_hex = Some(hex::encode(&kp.secret[..]));
     save(path, c)?;
     Ok(kp.secret)

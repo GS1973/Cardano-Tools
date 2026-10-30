@@ -1,8 +1,8 @@
 use crate::{config, koios, tx_builder, AppState};
+use serde::Serialize;
 use shared::chain_context::ChainContext;
 use shared::drep_id::drep_id_to_keyhash;
 use shared::error::ErrorEnvelope;
-use serde::Serialize;
 use std::sync::Arc;
 use tracing::error;
 
@@ -20,18 +20,82 @@ pub(crate) const MAX_SUPPLY_LOVELACE: u64 = 45_000_000_000_000_000;
 
 pub(crate) const EXPLORER_TX_URL_BASE: &str = "https://explorer.cardano.org/en/transaction?id=";
 
-pub(crate) fn now_unix_ts() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+/// A Unix-timestamp floor below which the clock is treated as unset rather
+/// than as a real time (2024-01-01 UTC, the same floor the signer uses).
+const MIN_PLAUSIBLE_NOW_UNIX: u64 = 1_704_067_200;
+
+/// Accept a wall-clock reading only when it can be a real time. `None` is a
+/// clock before the UNIX epoch. A request stamped by an unset clock would be
+/// refused by the signer as stale after the air-gap round trip; refusing it
+/// here names the actual cause.
+fn plausible_now(secs: Option<u64>) -> Result<u64, ErrorEnvelope> {
+    match secs {
+        Some(s) if s >= MIN_PLAUSIBLE_NOW_UNIX => Ok(s),
+        other => {
+            error!(now = ?other, "system clock is unset or implausible");
+            Err(ErrorEnvelope::internal(
+                "this machine's clock looks unset (reads before 2024). Set the clock, then retry",
+            ))
+        }
+    }
+}
+
+pub(crate) fn now_unix_ts() -> Result<u64, ErrorEnvelope> {
+    plausible_now(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_secs()),
+    )
+}
+
+/// Live fee parameters for building a transaction, read from the chain-data
+/// provider and checked against the constitution's guardrails
+/// (`koios::protocol_params`).
+pub(crate) async fn fee_params(
+    app: &Arc<AppState>,
+) -> Result<tx_builder::FeeParams, ErrorEnvelope> {
+    let p = koios::protocol_params(&app.http, &app.koios_base_url).await.map_err(|e| {
+        error!(error = %e, "koios protocol_params failed");
+        match e {
+            koios::KoiosError::OutOfBand { name, .. } => ErrorEnvelope::upstream(format!(
+                "the chain-data provider returned a protocol parameter ({name}) outside the range the network allows. Not building a transaction from it."
+            )),
+            _ => ErrorEnvelope::upstream("upstream service unavailable"),
+        }
+    })?;
+    Ok(tx_builder::FeeParams {
+        min_fee_a: p.min_fee_a,
+        min_fee_b: p.min_fee_b,
+        utxo_cost_per_byte: p.utxo_cost_per_byte,
+    })
+}
+
+/// Reject a transaction whose fee is above the ceiling the signer accepts
+/// (`shared::validate::MAX_FEE_LOVELACE`). The signer would refuse it
+/// anyway; caught here it is a clear up-front error instead of a refusal
+/// after the air-gap round trip. An honest build never comes near it.
+pub(crate) fn guard_fee(fee_lovelace: u64) -> Result<(), ErrorEnvelope> {
+    let max = shared::validate::MAX_FEE_LOVELACE;
+    if fee_lovelace > max {
+        error!(
+            fee = fee_lovelace,
+            max, "computed fee is above the signer's ceiling"
+        );
+        return Err(ErrorEnvelope::invalid(format!(
+            "computed fee ({fee_lovelace} lovelace) is above the {max} lovelace the signer accepts: the payment address holds too many UTxOs for one transaction. Consolidate them first"
+        )));
+    }
+    Ok(())
 }
 
 /// Guard a Koios-supplied lovelace amount (DRep deposit / retire refund)
 /// against corrupt or hostile values above the total supply.
 pub(crate) fn check_supply_bound(lovelace: u64, field: &'static str) -> Result<(), ErrorEnvelope> {
     if lovelace > MAX_SUPPLY_LOVELACE {
-        return Err(ErrorEnvelope::upstream(format!("{field} exceeds the total lovelace supply")));
+        return Err(ErrorEnvelope::upstream(format!(
+            "{field} exceeds the total lovelace supply"
+        )));
     }
     Ok(())
 }
@@ -41,7 +105,8 @@ pub(crate) fn check_supply_bound(lovelace: u64, field: &'static str) -> Result<(
 /// registered DRep with `active` and/or `drep_status == "registered"`;
 /// accept either signal so the three flows can never drift apart.
 pub(crate) fn drep_is_registered(info: Option<&koios::DrepInfo>) -> bool {
-    info.map(|i| i.active || i.drep_status.as_deref() == Some("registered")).unwrap_or(false)
+    info.map(|i| i.active || i.drep_status.as_deref() == Some("registered"))
+        .unwrap_or(false)
 }
 
 pub(crate) fn paired_keys_or_err(
@@ -49,7 +114,7 @@ pub(crate) fn paired_keys_or_err(
 ) -> Result<(zeroize::Zeroizing<[u8; 32]>, [u8; 32]), ErrorEnvelope> {
     let cfg = state.config.read().unwrap();
     config::paired_keys(&cfg).ok_or_else(|| {
-        ErrorEnvelope::not_paired("online tool is not paired with a signer — open Pairing first")
+        ErrorEnvelope::not_paired("online tool is not paired with a signer. Open Pairing first")
     })
 }
 
@@ -57,15 +122,15 @@ pub(crate) fn paired_keys_or_err(
 /// only `current_slot` (TTL sanity) and `built_at_unix` (signer replay
 /// window) are load-bearing. Epoch + slot are real (from the tip) for the
 /// signer's top-bar display.
-pub(crate) fn chain_context_from_tip(tip: &koios::Tip) -> ChainContext {
-    ChainContext {
+pub(crate) fn chain_context_from_tip(tip: &koios::Tip) -> Result<ChainContext, ErrorEnvelope> {
+    Ok(ChainContext {
         current_epoch: tip.epoch_no,
         current_slot: tip.abs_slot,
         current_kes_period: 0,
         epoch_ends_at_unix: 0,
         opcert_expires_at_unix: None,
-        built_at_unix: now_unix_ts(),
-    }
+        built_at_unix: now_unix_ts()?,
+    })
 }
 
 /// Fetch UTxOs at `payment_address`, parse each `value` to u64, return the
@@ -84,7 +149,10 @@ pub(crate) async fn fetch_payment_utxos(
     let mut amounts: Vec<u64> = Vec::with_capacity(utxos.len());
     let mut total: u64 = 0;
     for u in &utxos {
-        let v: u64 = u.value.parse().map_err(|_| ErrorEnvelope::upstream("utxo value not a u64"))?;
+        let v: u64 = u
+            .value
+            .parse()
+            .map_err(|_| ErrorEnvelope::upstream("utxo value not a u64"))?;
         total = total.saturating_add(v);
         amounts.push(v);
     }
@@ -100,7 +168,8 @@ pub(crate) fn input_assets(
     let mut all: Vec<airgap_core::asset::Asset> = Vec::new();
     for u in utxos {
         all.extend(
-            u.assets().map_err(|_| ErrorEnvelope::upstream("utxo asset quantity not a u64"))?,
+            u.assets()
+                .map_err(|_| ErrorEnvelope::upstream("utxo asset quantity not a u64"))?,
         );
     }
     airgap_core::tx::change_assets(&all, &[])
@@ -131,7 +200,10 @@ pub(crate) fn parse_anchor(
     url: &Option<String>,
     hash: &Option<String>,
 ) -> Result<Option<(String, String)>, ErrorEnvelope> {
-    match (url.as_deref().map(str::trim), hash.as_deref().map(str::trim)) {
+    match (
+        url.as_deref().map(str::trim),
+        hash.as_deref().map(str::trim),
+    ) {
         (None, None) | (Some(""), Some("")) | (Some(""), None) | (None, Some("")) => Ok(None),
         (Some(u), Some(h)) if !u.is_empty() && !h.is_empty() => {
             if u.len() > MAX_ANCHOR_URL_BYTES {
@@ -173,10 +245,18 @@ pub(crate) fn start_ctx(app: &Arc<AppState>, pin: &str) -> Result<StartCtx, Erro
     let payment_address = cfg
         .payment_address
         .clone()
-        .ok_or(ErrorEnvelope::not_configured("payment_address not configured"))?;
+        .ok_or(ErrorEnvelope::not_configured(
+            "payment_address not configured",
+        ))?;
     let drep_keyhash = drep_id_to_keyhash(&drep_id_bech32)
         .map_err(|e| ErrorEnvelope::invalid(format!("configured DRep id is invalid: {e}")))?;
-    Ok(StartCtx { own_sk, peer_pk, drep_id_bech32, drep_keyhash, payment_address })
+    Ok(StartCtx {
+        own_sk,
+        peer_pk,
+        drep_id_bech32,
+        drep_keyhash,
+        payment_address,
+    })
 }
 
 #[derive(Serialize)]
@@ -259,48 +339,55 @@ pub(crate) enum ManifestHashResponse {
 }
 
 /// Fetch the manifest document at `url` and return the blake2b-256 of its raw
-/// bytes — the CIP-119/CIP-100 anchor hash. Hashes the document content, never
+/// bytes: the CIP-119/CIP-100 anchor hash. Hashes the document content, never
 /// the URL string. Operator-local convenience: the same loopback operator
-/// could `curl` the URL themselves.
+/// could `curl` the URL themselves. The fetch goes through the guarded
+/// document client (`airgap-fetch-guard`): https and public addresses only,
+/// and without the Koios API key the main client carries.
 pub(crate) async fn manifest_hash_handler(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     axum::Json(body): axum::Json<ManifestHashBody>,
 ) -> axum::Json<ManifestHashResponse> {
-    const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
-    let url = body.url.trim();
-    if !(url.starts_with("https://") || url.starts_with("http://")) {
-        return axum::Json(ManifestHashResponse::Error {
-            message: "URL must start with http:// or https://".into(),
-        });
-    }
-    let resp = match state.http.get(url).send().await {
-        Ok(r) => r,
+    match airgap_fetch_guard::document_hash(&state.doc_http, &body.url).await {
+        Ok((hash, byte_len)) => axum::Json(ManifestHashResponse::Ok {
+            hash_hex: hex::encode(hash),
+            byte_len,
+        }),
         Err(e) => {
-            error!(error = %e, "manifest fetch failed");
-            return axum::Json(ManifestHashResponse::Error { message: "could not fetch the manifest URL".into() });
+            if let airgap_fetch_guard::DocumentError::Fetch(ref err)
+            | airgap_fetch_guard::DocumentError::Read(ref err) = e
+            {
+                error!(error = %err, "manifest fetch failed");
+            }
+            axum::Json(ManifestHashResponse::Error {
+                message: e.describe("manifest"),
+            })
         }
-    };
-    if !resp.status().is_success() {
-        return axum::Json(ManifestHashResponse::Error {
-            message: format!("manifest URL returned HTTP {}", resp.status().as_u16()),
-        });
     }
-    if resp.content_length().map(|l| l as usize > MAX_MANIFEST_BYTES).unwrap_or(false) {
-        return axum::Json(ManifestHashResponse::Error { message: "manifest is larger than 1 MiB".into() });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unset_clock_is_an_error_not_a_zero_timestamp() {
+        assert_eq!(plausible_now(Some(1_790_000_000)).unwrap(), 1_790_000_000);
+        assert_eq!(
+            plausible_now(Some(MIN_PLAUSIBLE_NOW_UNIX)).unwrap(),
+            MIN_PLAUSIBLE_NOW_UNIX
+        );
+        assert!(plausible_now(Some(MIN_PLAUSIBLE_NOW_UNIX - 1)).is_err());
+        assert!(plausible_now(Some(0)).is_err());
+        assert!(plausible_now(None).is_err());
+        assert!(now_unix_ts().is_ok(), "this machine's clock is set");
     }
-    // The Content-Length header is attacker-controlled (and absent on chunked
-    // transfer), so the read itself is capped: one byte past the limit is
-    // enough to tell "too large" from "exactly at the limit".
-    let bytes = match koios::read_capped(resp, MAX_MANIFEST_BYTES + 1).await {
-        Ok(b) => b,
-        Err(e) => {
-            error!(error = %e, "manifest body read failed");
-            return axum::Json(ManifestHashResponse::Error { message: "could not read the manifest body".into() });
-        }
-    };
-    if bytes.len() > MAX_MANIFEST_BYTES {
-        return axum::Json(ManifestHashResponse::Error { message: "manifest is larger than 1 MiB".into() });
+
+    #[test]
+    fn fee_guard_follows_the_signer_ceiling() {
+        let max = shared::validate::MAX_FEE_LOVELACE;
+        assert!(guard_fee(170_000).is_ok());
+        assert!(guard_fee(max).is_ok());
+        assert!(guard_fee(max + 1).is_err());
     }
-    let hash = pallas_crypto::hash::Hasher::<256>::hash(&bytes);
-    axum::Json(ManifestHashResponse::Ok { hash_hex: hex::encode(hash), byte_len: bytes.len() })
 }

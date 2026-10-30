@@ -5,10 +5,10 @@
 //! here: the four DRep operation request/result types, the DRep-id
 //! decoder, the witness-role label, and the body validators.
 //!
-//! Role-neutral primitives — the encrypted QR/UR transport, X25519
+//! Role-neutral primitives (the encrypted QR/UR transport, X25519
 //! pairing, operator PIN, cardano-cli key loading, chain-context
 //! snapshot, the UTxO wire shape, and the Conway tx-assembly +
-//! body-validation primitives — live in the `airgap-core` crate (shared
+//! body-validation primitives) live in the `airgap-core` crate (shared
 //! with SPO Tools) and are re-exported here so every `shared::` /
 //! `crate::` path resolves uniformly.
 
@@ -16,8 +16,9 @@
 
 // Role-neutral primitives, re-exported from airgap-core.
 pub use airgap_core::{
-    cardano_keys, chain_context, config_helpers, crypto, csrf, error, fingerprint, pairing, pin,
-    qr, tx, utxo, validate, wire_io,
+    airgap_monitor, cardano_keys, chain_context, config_helpers, crypto, csrf, error, fingerprint,
+    key_files, list_dir, listen, nquads, pairing, pin, qr, signer_state, signing, tx, utxo,
+    validate, wire_io,
 };
 
 /// Fingerprint a request body for the operator-PIN proof, computed over the
@@ -78,8 +79,17 @@ mod request_body_fp_tests {
 
         // Signer side: recompute the body fingerprint over the blanked request.
         let body_fp_signer = request_body_fp(&received);
-        assert_eq!(body_fp_online, body_fp_signer, "body_fp must match across the wire");
-        assert!(pin::verify_pin("1234", "drep_vote", 1700, &body_fp_signer, &proof));
+        assert_eq!(
+            body_fp_online, body_fp_signer,
+            "body_fp must match across the wire"
+        );
+        assert!(pin::verify_pin(
+            "1234",
+            "drep_vote",
+            1700,
+            &body_fp_signer,
+            &proof
+        ));
     }
 
     #[test]
@@ -101,6 +111,12 @@ mod request_body_fp_tests {
             operator_pin_proof: String::new(),
         };
         let swapped_fp = request_body_fp(&swapped);
-        assert!(!pin::verify_pin("1234", "drep_vote", 1700, &swapped_fp, &proof));
+        assert!(!pin::verify_pin(
+            "1234",
+            "drep_vote",
+            1700,
+            &swapped_fp,
+            &proof
+        ));
     }
 }

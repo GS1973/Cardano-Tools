@@ -14,7 +14,7 @@
       <v-card-text v-if="error"><v-alert type="error" density="compact" variant="tonal">{{ error }}</v-alert></v-card-text>
       <v-card-text v-else-if="!preview" class="text-medium-emphasis">Loading…</v-card-text>
       <v-card-text v-else>
-        <v-alert v-if="!preview.registered" type="warning" density="compact" variant="tonal" class="mb-4">This DRep is not registered yet. Register it first — a vote from an unregistered DRep is rejected by the ledger, and sending one to the signer will be blocked.</v-alert>
+        <v-alert v-if="!preview.registered" type="warning" density="compact" variant="tonal" class="mb-4">This DRep is not registered yet. Register it first: a vote from an unregistered DRep is rejected by the ledger, and sending one to the signer will be blocked.</v-alert>
         <v-alert v-if="!preview.can_cover" type="warning" density="compact" variant="tonal" class="mb-4">Payment address has insufficient funds to cover the fee ({{ fmtAda(preview.estimated_fee_lovelace) }}). Top it up before continuing.</v-alert>
         <v-table density="compact" class="mb-3"><tbody>
           <tr><td class="text-medium-emphasis" style="width: 280px;">Voting as DRep</td><td><code class="text-caption">{{ preview.drep_id }}</code></td></tr>
@@ -27,7 +27,7 @@
           <h3 class="text-subtitle-1 mt-2 mb-2">Choose governance action</h3>
           <v-alert v-if="preview.proposals.length === 0" type="info" density="compact" variant="tonal" class="mb-2">No open governance actions right now.</v-alert>
           <v-select v-else v-model="selectedIdx" :items="proposalItems" item-title="label" item-value="value" label="Open governance action" density="compact" variant="outlined" hide-details class="mb-3" />
-          <p class="text-caption text-medium-emphasis mb-3">A DRep votes on every action type — parameter changes (including the decentralisation parameters an SPO cannot touch), hard forks, treasury, committee, constitution, info.</p>
+          <p class="text-caption text-medium-emphasis mb-3">A DRep votes on every action type: parameter changes (including the decentralisation parameters an SPO cannot touch), hard forks, treasury, committee, constitution, info.</p>
 
           <template v-if="selectedProposal">
             <v-table density="compact" class="mb-3"><tbody>
@@ -43,11 +43,11 @@
               <v-radio value="no" label="No" />
               <v-radio value="abstain" label="Abstain" />
             </v-radio-group>
-            <p class="text-caption text-medium-emphasis mb-3">Signed by your DRep key; it carries the voting power vote-delegated to your DRep.</p>
+            <p class="text-caption text-medium-emphasis mb-3">Signed by your DRep key. It carries the voting power vote-delegated to your DRep.</p>
 
             <h3 class="text-subtitle-1 mt-2 mb-2">Rationale (CIP-136, optional)</h3>
             <template v-if="preview.manifest_base_url">
-              <p class="text-caption text-medium-emphasis mb-2">Enter just the file name; the on-chain URL is composed from your configured base. The hash is the blake2b-256 of the document's contents — host it first, then compute. Leave the file name empty for no anchor.</p>
+              <p class="text-caption text-medium-emphasis mb-2">Enter just the file name. The on-chain URL is composed from your configured base. The hash is the blake2b-256 of the document's contents: host it first, then compute. Leave the file name empty for no anchor.</p>
               <v-text-field v-model="manifestFile" label="Rationale file name" placeholder="rationale.jsonld" density="compact" variant="outlined" hide-details class="mb-2" />
               <p v-if="composedManifestUrl" class="text-caption text-medium-emphasis mb-2">Full URL (goes on-chain): <code style="word-break: break-all;">{{ composedManifestUrl }}</code></p>
               <div class="d-flex align-start" style="gap: 0.5rem;">
@@ -124,7 +124,7 @@ const witnessRoles = computed(() => (result.value?.witnesses ?? []).map((w: any)
 function proposalLabel(p: any): string {
   const head = p.title || p.proposal_type
   const ver = p.target_protocol_major != null ? ` (→ v${p.target_protocol_major})` : ''
-  return `${p.proposal_type}${ver} — ${head} — ${p.action_tx_hash.slice(0, 12)}…#${p.action_index}`
+  return `${p.proposal_type}${ver}, ${head}, ${p.action_tx_hash.slice(0, 12)}…#${p.action_index}`
 }
 function formatVote(v: VoteChoice): string { return v === 'yes' ? 'Yes' : v === 'no' ? 'No' : 'Abstain' }
 

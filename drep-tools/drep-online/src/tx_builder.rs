@@ -8,7 +8,7 @@
 //! `airgap_core::tx`; only the cert/voter shape lives here. The fee is
 //! computed from the encoded body size (mainnet linear fee, with headroom
 //! for the two witnesses) and returned to the handler, which fixes it in
-//! the request the signer pins. The body is unsigned — the signer returns
+//! the request the signer pins. The body is unsigned: the signer returns
 //! witnesses and `airgap_core::tx::assemble_signed_tx` re-assembles the
 //! signed tx for submission.
 
@@ -22,10 +22,10 @@ use pallas_primitives::{Hash, NetworkId, StakeCredential, TransactionInput};
 
 use shared::tx::{check_tx_hash_hex_len, decode_address, parse_input};
 // Re-exported so handlers/util can name `tx_builder::TxInput` / `TxBuildError`.
-pub use shared::tx::{TxBuildError, TxInput};
-use shared::vote::VoteChoice;
 use airgap_core::asset::Asset;
 use airgap_core::tx::{make_asset_output, min_ada_for_output};
+pub use shared::tx::{TxBuildError, TxInput};
+use shared::vote::VoteChoice;
 
 /// Optional rationale/manifest anchor: a public document URL plus the
 /// 32-byte blake2b-256 hash of its contents (hex).
@@ -51,7 +51,8 @@ fn drep_credential(keyhash: [u8; 28]) -> StakeCredential {
 fn build_anchor(anchor: &Option<AnchorInput>) -> Result<Nullable<Anchor>, TxBuildError> {
     match anchor {
         Some(a) => {
-            let h = hex::decode(&a.hash_hex).map_err(|_| TxBuildError::HashHex(a.hash_hex.clone()))?;
+            let h =
+                hex::decode(&a.hash_hex).map_err(|_| TxBuildError::HashHex(a.hash_hex.clone()))?;
             if h.len() != 32 {
                 return Err(TxBuildError::HashHex(format!(
                     "anchor hash not 32 bytes (got {})",
@@ -121,16 +122,22 @@ fn one_cert(cert: Certificate) -> Result<NonEmptySet<Certificate>, TxBuildError>
 }
 
 // ---------------------------------------------------------------------------
-// Fee and change, from the encoded body size (mainnet parameters)
+// Fee and change, from the encoded body size and the live parameters
 // ---------------------------------------------------------------------------
 
-/// Mainnet `coinsPerUtxoByte`.
-const UTXO_COST_PER_BYTE: u64 = 4310;
+/// The protocol parameters the fee and the min-ADA change are computed from,
+/// read live from the chain-data provider and checked against the
+/// constitution's guardrails before use (`koios::protocol_params`).
+#[derive(Debug, Clone, Copy)]
+pub struct FeeParams {
+    /// `txFeePerByte`.
+    pub min_fee_a: u64,
+    /// `txFeeFixed`.
+    pub min_fee_b: u64,
+    /// `utxoCostPerByte`.
+    pub utxo_cost_per_byte: u64,
+}
 
-/// Mainnet linear-fee parameters: fee = `MIN_FEE_A` × signed-tx size +
-/// `MIN_FEE_B`. Every body here is mainnet-only (`NetworkId::Mainnet`).
-const MIN_FEE_A: u64 = 44;
-const MIN_FEE_B: u64 = 155_381;
 /// Conservative per-witness wire size: array tag + (len+vkey 32) + (len+sig 64).
 const WITNESS_BYTES: u64 = 100;
 /// Witness-set map + outer tx array + a small safety margin (also covers the
@@ -140,8 +147,9 @@ const TX_WRAP_OVERHEAD: u64 = 32;
 const N_WITNESSES: u64 = 2;
 
 /// Linear Cardano fee over the estimated wire size of the fully signed tx.
-fn fee_for_body(body_cbor_len: usize) -> u64 {
-    MIN_FEE_A * (body_cbor_len as u64 + N_WITNESSES * WITNESS_BYTES + TX_WRAP_OVERHEAD) + MIN_FEE_B
+fn fee_for_body(body_cbor_len: usize, p: &FeeParams) -> u64 {
+    let size = body_cbor_len as u64 + N_WITNESSES * WITNESS_BYTES + TX_WRAP_OVERHEAD;
+    p.min_fee_a.saturating_mul(size).saturating_add(p.min_fee_b)
 }
 
 /// Body bytes per spent input: 2-element array, 32-byte hash bytestring, index.
@@ -156,34 +164,38 @@ const PREVIEW_BASE_BYTES: u64 = 360;
 
 /// Preview-screen fee estimate. The preview cannot encode the real body (the
 /// operator has not entered the anchor / action yet), so this sizes a
-/// worst-case body from the input and asset counts — deliberately at or above
+/// worst-case body from the input and asset counts: deliberately at or above
 /// the fee `build_*_body` later computes from the encoded body.
-pub fn preview_fee_lovelace(n_inputs: usize, n_change_assets: usize) -> u64 {
+pub fn preview_fee_lovelace(n_inputs: usize, n_change_assets: usize, p: &FeeParams) -> u64 {
     let body_bytes = PREVIEW_BASE_BYTES
         + n_inputs as u64 * PREVIEW_INPUT_BYTES
         + n_change_assets as u64 * PREVIEW_ASSET_BYTES;
-    fee_for_body(body_bytes as usize)
+    fee_for_body(body_bytes as usize, p)
 }
 
 /// Change output back to the payment address, preserving any native assets the
 /// spent UTxOs carry (drep sends no assets, so all of them return as change).
-/// Guards that the change ADA covers the output's min-ADA — coin-only change
-/// included — so the node will not reject an under-funded output.
+/// Guards that the change ADA covers the output's min-ADA, coin-only change
+/// included, so the node will not reject an under-funded output.
 fn change_output(
     payment: Vec<u8>,
     change: u64,
     assets: &[Asset],
+    utxo_cost_per_byte: u64,
 ) -> Result<TransactionOutput, TxBuildError> {
     let out = make_asset_output(payment, change, assets)?;
-    let need = min_ada_for_output(&out, UTXO_COST_PER_BYTE)?;
+    let need = min_ada_for_output(&out, utxo_cost_per_byte)?;
     if change < need {
-        return Err(TxBuildError::InsufficientInputs { fee: need, utxo_total: change });
+        return Err(TxBuildError::InsufficientInputs {
+            fee: need,
+            utxo_total: change,
+        });
     }
     Ok(out)
 }
 
 /// Encode the final body for an already-built middle. The fee comes from the
-/// encoded size, which the change amount in turn depends on — so a draft body
+/// encoded size, which the change amount in turn depends on, so a draft body
 /// with fee 0 and change at its ceiling (an upper bound on the final
 /// encoding) is sized first, then the real fee and change are encoded.
 /// `spent` leaves the wallet on top of the fee (the register deposit);
@@ -201,6 +213,7 @@ fn finish_body(
     voting_procedures: Option<
         NonEmptyKeyValuePairs<Voter, NonEmptyKeyValuePairs<GovActionId, VotingProcedure>>,
     >,
+    fee_params: &FeeParams,
 ) -> Result<DrepTxBody, TxBuildError> {
     let change_ceiling = utxo_total.saturating_add(refunded);
     let draft_change = make_asset_output(payment.clone(), change_ceiling, change_assets)?;
@@ -212,7 +225,7 @@ fn finish_body(
         certificates,
         voting_procedures,
     );
-    let fee = fee_for_body(encode(&body)?.len());
+    let fee = fee_for_body(encode(&body)?.len(), fee_params);
     let change = utxo_total
         .checked_sub(fee)
         .and_then(|v| v.checked_sub(spent))
@@ -222,9 +235,18 @@ fn finish_body(
             utxo_total,
         })?;
     body.fee = fee;
-    body.outputs = vec![change_output(payment, change, change_assets)?];
+    body.outputs = vec![change_output(
+        payment,
+        change,
+        change_assets,
+        fee_params.utxo_cost_per_byte,
+    )?];
     let body_cbor = encode(&body)?;
-    Ok(DrepTxBody { body_cbor, fee_lovelace: fee, change_to_payment_address_lovelace: change })
+    Ok(DrepTxBody {
+        body_cbor,
+        fee_lovelace: fee,
+        change_to_payment_address_lovelace: change,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -240,6 +262,8 @@ pub struct RegisterInputs<'a> {
     pub deposit_lovelace: u64,
     pub anchor: Option<AnchorInput>,
     pub ttl_slot: u64,
+    /// Live fee parameters (`koios::protocol_params`).
+    pub fee_params: FeeParams,
 }
 
 pub fn build_register_body(input: &RegisterInputs) -> Result<DrepTxBody, TxBuildError> {
@@ -260,6 +284,7 @@ pub fn build_register_body(input: &RegisterInputs) -> Result<DrepTxBody, TxBuild
         input.ttl_slot,
         Some(one_cert(cert)?),
         None,
+        &input.fee_params,
     )
 }
 
@@ -275,11 +300,16 @@ pub struct UpdateInputs<'a> {
     pub drep_keyhash: [u8; 28],
     pub anchor: Option<AnchorInput>,
     pub ttl_slot: u64,
+    /// Live fee parameters (`koios::protocol_params`).
+    pub fee_params: FeeParams,
 }
 
 pub fn build_update_body(input: &UpdateInputs) -> Result<DrepTxBody, TxBuildError> {
     let payment = decode_address(input.payment_address_bech32, "addr")?;
-    let cert = Certificate::UpdateDRepCert(drep_credential(input.drep_keyhash), build_anchor(&input.anchor)?);
+    let cert = Certificate::UpdateDRepCert(
+        drep_credential(input.drep_keyhash),
+        build_anchor(&input.anchor)?,
+    );
     finish_body(
         input.utxo_inputs,
         payment,
@@ -290,6 +320,7 @@ pub fn build_update_body(input: &UpdateInputs) -> Result<DrepTxBody, TxBuildErro
         input.ttl_slot,
         Some(one_cert(cert)?),
         None,
+        &input.fee_params,
     )
 }
 
@@ -305,11 +336,16 @@ pub struct RetireInputs<'a> {
     pub drep_keyhash: [u8; 28],
     pub deposit_refund_lovelace: u64,
     pub ttl_slot: u64,
+    /// Live fee parameters (`koios::protocol_params`).
+    pub fee_params: FeeParams,
 }
 
 pub fn build_retire_body(input: &RetireInputs) -> Result<DrepTxBody, TxBuildError> {
     let payment = decode_address(input.payment_address_bech32, "addr")?;
-    let cert = Certificate::UnRegDRepCert(drep_credential(input.drep_keyhash), input.deposit_refund_lovelace);
+    let cert = Certificate::UnRegDRepCert(
+        drep_credential(input.drep_keyhash),
+        input.deposit_refund_lovelace,
+    );
     // Refund is returned by the cert; change = total - fee + refund.
     finish_body(
         input.utxo_inputs,
@@ -321,6 +357,7 @@ pub fn build_retire_body(input: &RetireInputs) -> Result<DrepTxBody, TxBuildErro
         input.ttl_slot,
         Some(one_cert(cert)?),
         None,
+        &input.fee_params,
     )
 }
 
@@ -339,6 +376,8 @@ pub struct VoteInputs<'a> {
     pub vote: VoteChoice,
     pub anchor: Option<AnchorInput>,
     pub ttl_slot: u64,
+    /// Live fee parameters (`koios::protocol_params`).
+    pub fee_params: FeeParams,
 }
 
 pub fn build_vote_body(input: &VoteInputs) -> Result<DrepTxBody, TxBuildError> {
@@ -358,7 +397,10 @@ pub fn build_vote_body(input: &VoteInputs) -> Result<DrepTxBody, TxBuildError> {
         VoteChoice::Yes => Vote::Yes,
         VoteChoice::Abstain => Vote::Abstain,
     };
-    let procedure = VotingProcedure { vote, anchor: build_anchor(&input.anchor)? };
+    let procedure = VotingProcedure {
+        vote,
+        anchor: build_anchor(&input.anchor)?,
+    };
     let gov_action_id = GovActionId {
         transaction_id: Hash::from(action_hash),
         action_index: input.action_index,
@@ -377,6 +419,7 @@ pub fn build_vote_body(input: &VoteInputs) -> Result<DrepTxBody, TxBuildError> {
         input.ttl_slot,
         None,
         Some(voting_procedures),
+        &input.fee_params,
     )
 }
 
@@ -386,6 +429,12 @@ pub fn build_vote_body(input: &VoteInputs) -> Result<DrepTxBody, TxBuildError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const PARAMS: FeeParams = FeeParams {
+        min_fee_a: 44,
+        min_fee_b: 155_381,
+        utxo_cost_per_byte: 4_310,
+    };
     use shared::anchor::GovAnchor;
     use shared::chain_context::ChainContext;
     use shared::register::DRepRegisterRequest;
@@ -408,10 +457,16 @@ mod tests {
         hex::encode([0x5Au8; 32])
     }
     fn anchor_input() -> AnchorInput {
-        AnchorInput { url: ANCHOR_URL.into(), hash_hex: anchor_hash_hex() }
+        AnchorInput {
+            url: ANCHOR_URL.into(),
+            hash_hex: anchor_hash_hex(),
+        }
     }
     fn gov_anchor() -> GovAnchor {
-        GovAnchor { url: ANCHOR_URL.into(), hash_hex: anchor_hash_hex() }
+        GovAnchor {
+            url: ANCHOR_URL.into(),
+            hash_hex: anchor_hash_hex(),
+        }
     }
     fn drep_id() -> String {
         let mut d = vec![0x22u8];
@@ -419,7 +474,10 @@ mod tests {
         bech32::encode::<bech32::Bech32>(bech32::Hrp::parse("drep").unwrap(), &d).unwrap()
     }
     fn utxo() -> Vec<TxInput> {
-        vec![TxInput { tx_hash_hex: "00".repeat(32), tx_index: 0 }]
+        vec![TxInput {
+            tx_hash_hex: "00".repeat(32),
+            tx_index: 0,
+        }]
     }
     fn req_inputs() -> Vec<UtxoInput> {
         vec![UtxoInput {
@@ -449,6 +507,7 @@ mod tests {
         }];
         let u = utxo();
         let with_assets = build_register_body(&RegisterInputs {
+            fee_params: PARAMS,
             utxo_inputs: &u,
             change_assets: &assets,
             utxo_total_lovelace: TOTAL,
@@ -460,6 +519,7 @@ mod tests {
         })
         .unwrap();
         let without = build_register_body(&RegisterInputs {
+            fee_params: PARAMS,
             utxo_inputs: &u,
             change_assets: &[],
             utxo_total_lovelace: TOTAL,
@@ -486,6 +546,7 @@ mod tests {
         // change after fee + deposit is a few thousand lovelace, far below
         // an asset output's min-ADA.
         let err = build_register_body(&RegisterInputs {
+            fee_params: PARAMS,
             utxo_inputs: &utxo(),
             change_assets: &assets,
             utxo_total_lovelace: DEPOSIT + 200_000,
@@ -501,6 +562,7 @@ mod tests {
     #[test]
     fn register_round_trip() {
         let built = build_register_body(&RegisterInputs {
+            fee_params: PARAMS,
             utxo_inputs: &utxo(),
             change_assets: &[],
             utxo_total_lovelace: TOTAL,
@@ -535,6 +597,7 @@ mod tests {
     #[test]
     fn update_round_trip_keepalive() {
         let built = build_update_body(&UpdateInputs {
+            fee_params: PARAMS,
             utxo_inputs: &utxo(),
             change_assets: &[],
             utxo_total_lovelace: TOTAL,
@@ -563,6 +626,7 @@ mod tests {
     #[test]
     fn retire_round_trip() {
         let built = build_retire_body(&RetireInputs {
+            fee_params: PARAMS,
             utxo_inputs: &utxo(),
             change_assets: &[],
             utxo_total_lovelace: TOTAL,
@@ -595,6 +659,7 @@ mod tests {
     #[test]
     fn vote_round_trip_with_anchor() {
         let built = build_vote_body(&VoteInputs {
+            fee_params: PARAMS,
             utxo_inputs: &utxo(),
             change_assets: &[],
             utxo_total_lovelace: TOTAL,
@@ -629,6 +694,7 @@ mod tests {
     #[test]
     fn register_rejects_insufficient_inputs() {
         let err = build_register_body(&RegisterInputs {
+            fee_params: PARAMS,
             utxo_inputs: &utxo(),
             change_assets: &[],
             utxo_total_lovelace: 200_000, // cannot cover deposit
@@ -646,6 +712,7 @@ mod tests {
     fn fee_scales_with_input_count() {
         let update = |inputs: &[TxInput]| {
             build_update_body(&UpdateInputs {
+                fee_params: PARAMS,
                 utxo_inputs: inputs,
                 change_assets: &[],
                 utxo_total_lovelace: TOTAL,
@@ -658,10 +725,13 @@ mod tests {
         };
         let one = update(&utxo());
         let many_inputs: Vec<TxInput> = (0..40u8)
-            .map(|i| TxInput { tx_hash_hex: format!("{i:02x}").repeat(32), tx_index: 0 })
+            .map(|i| TxInput {
+                tx_hash_hex: format!("{i:02x}").repeat(32),
+                tx_index: 0,
+            })
             .collect();
         let many = update(&many_inputs);
-        // 39 extra inputs, ≥36 body bytes each — a flat fee would miss this.
+        // 39 extra inputs, ≥36 body bytes each: a flat fee would miss this.
         assert!(many.fee_lovelace >= one.fee_lovelace + 39 * 36 * 44);
         // and the fee covers the ledger minimum for the fully signed tx:
         // body + two ~101-byte vkey witnesses + the outer wrapper.
@@ -672,9 +742,10 @@ mod tests {
     #[test]
     fn coin_only_change_below_min_ada_is_rejected() {
         // 1.0 ADA at the address covers the fee, but the pure-ADA change left
-        // over is below the ~0.86 ADA min-UTxO — must fail at build time, not
+        // over is below the ~0.86 ADA min-UTxO: must fail at build time, not
         // at the node after the signing ceremony.
         let err = build_update_body(&UpdateInputs {
+            fee_params: PARAMS,
             utxo_inputs: &utxo(),
             change_assets: &[],
             utxo_total_lovelace: 1_000_000,
@@ -690,6 +761,7 @@ mod tests {
     #[test]
     fn preview_fee_is_at_or_above_built_fee() {
         let built = build_register_body(&RegisterInputs {
+            fee_params: PARAMS,
             utxo_inputs: &utxo(),
             change_assets: &[],
             utxo_total_lovelace: TOTAL,
@@ -700,6 +772,35 @@ mod tests {
             ttl_slot: TTL,
         })
         .unwrap();
-        assert!(preview_fee_lovelace(1, 0) >= built.fee_lovelace);
+        assert!(preview_fee_lovelace(1, 0, &PARAMS) >= built.fee_lovelace);
+    }
+
+    #[test]
+    fn the_fee_follows_the_live_parameters() {
+        let u = utxo();
+        let build = |p: FeeParams| {
+            build_update_body(&UpdateInputs {
+                fee_params: p,
+                utxo_inputs: &u,
+                change_assets: &[],
+                utxo_total_lovelace: TOTAL,
+                payment_address_bech32: PAYMENT,
+                drep_keyhash: KEYHASH,
+                anchor: Some(anchor_input()),
+                ttl_slot: TTL,
+            })
+            .unwrap()
+        };
+        let now = build(PARAMS);
+        let dearer = build(FeeParams {
+            min_fee_a: 50,
+            min_fee_b: 200_000,
+            ..PARAMS
+        });
+        assert!(dearer.fee_lovelace > now.fee_lovelace);
+        assert_eq!(
+            now.change_to_payment_address_lovelace,
+            TOTAL - now.fee_lovelace
+        );
     }
 }

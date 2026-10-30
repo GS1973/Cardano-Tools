@@ -6,7 +6,7 @@ import { ref } from 'vue'
  * import it without bringing in carousel state or QRCode rendering.
  *
  * Exposes the `scannerRef` ref (bound via `ref="scannerRef"` to a component
- * exposing `retry` — `<QRScanner>` directly or a `<ReceiveQrPanel>` wrapping
+ * exposing `retry`: `<QRScanner>` directly or a `<ReceiveQrPanel>` wrapping
  * one), a `retryingCamera` boolean that gates the spinner on the Retry
  * button, and a `retry()` helper that calls into the scanner's exposed
  * `retry` method while flipping the spinner state.

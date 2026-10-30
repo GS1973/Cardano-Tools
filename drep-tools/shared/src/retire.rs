@@ -1,10 +1,10 @@
-//! DRep retirement request/result — wire format between online tool and
+//! DRep retirement request/result: wire format between online tool and
 //! signer.
 //!
 //! One `UnRegDRepCert` carrying the deposit being refunded. The refund
 //! must equal what was locked at registration (the protocol checks this),
 //! so the online tool reads it from Koios `drep_info.deposit`, not from
-//! the current `drep_deposit` param — they can differ if the param changed
+//! the current `drep_deposit` param: they can differ if the param changed
 //! meanwhile. Change = inputs − fee + refund. Witnesses are Payment +
 //! DRep.
 
@@ -14,8 +14,8 @@ use ts_rs::TS;
 
 use crate::chain_context::ChainContext;
 use crate::utxo::UtxoInput;
-use crate::witness::VkeyWitness;
 use crate::wire_kind::DrepWireKind;
+use crate::witness::VkeyWitness;
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

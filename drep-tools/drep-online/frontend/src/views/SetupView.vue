@@ -2,21 +2,21 @@
   <v-card class="mb-4"><v-card-title>Setup</v-card-title></v-card>
   <v-card>
     <v-card-text>
-      <p class="text-caption text-medium-emphasis mb-4">Public configuration only — no private keys. The DRep + payment signing keys live on the air-gapped signer.</p>
+      <p class="text-caption text-medium-emphasis mb-4">Public configuration only: no private keys. The DRep + payment signing keys live on the air-gapped signer.</p>
 
       <v-text-field
         v-model="drepId"
-        label="DRep id (drep1…) — optional"
+        label="DRep id (drep1…): optional"
         placeholder="drep1… (CIP-105 or CIP-129)"
         density="compact" variant="outlined"
-        hint="Optional — leave blank for now and add it once the signer has generated your DRep key. Required before you can register, vote, update, or retire."
+        hint="Optional: leave blank for now and add it once the signer has generated your DRep key. Required before you can register, vote, update, or retire."
         persistent-hint
         :error-messages="drepIdError" class="mb-4"
       />
       <v-text-field
         v-model="paymentAddress"
         label="Payment address (addr1…)"
-        placeholder="addr1… — funds fees + the registration deposit"
+        placeholder="addr1…: funds fees + the registration deposit"
         density="compact" variant="outlined"
         :error-messages="paymentError" class="mb-2"
       />
@@ -25,7 +25,7 @@
         label="Koios API key (optional)"
         placeholder="leave blank for public rate limits"
         type="password" density="compact" variant="outlined"
-        :hint="hasKoiosKey ? 'A key is stored. Leave blank to keep it; type a new one to replace.' : ''"
+        :hint="hasKoiosKey ? 'A key is stored. Leave blank to keep it. Type a new one to replace.' : ''"
         persistent-hint class="mb-4"
       />
       <v-text-field
@@ -33,7 +33,7 @@
         label="Manifest base URL (optional)"
         placeholder="https://your-domain.example/governance/"
         density="compact" variant="outlined"
-        hint="Where you host your DRep manifest documents. Register/Update then only ask for the file name and can compute the hash for you."
+        hint="Where you host your DRep manifest documents, over https. Register/Update then only ask for the file name and can compute the hash for you."
         persistent-hint class="mb-4"
       />
 

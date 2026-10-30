@@ -19,7 +19,7 @@
             <v-btn class="mt-2" size="small" variant="text" prepend-icon="mdi-arrow-expand" @click="cameraEnlarged = true">Enlarge</v-btn>
           </div>
           <div style="flex: 1 1 auto; min-width: 0;">
-            <!-- Placeholder mirrors airgap-core's UR_TYPE_ACTION tag ("spo-tools-action-v2"), shared across products — not a typo. -->
+            <!-- Placeholder mirrors airgap-core's UR_TYPE_ACTION tag ("spo-tools-action-v2"), shared across products, not a typo. -->
             <v-textarea v-model="pasteInput" label="UR fragments from the online tool" rows="6" variant="outlined" density="compact" hide-details placeholder="ur:spo-tools-action-v2/..." />
             <v-btn class="mt-2" color="primary" :loading="receiving" :disabled="!pasteInput.trim()" prepend-icon="mdi-upload" @click="submitPasted">Submit</v-btn>
           </div>
@@ -45,7 +45,7 @@
     <!-- Preview: DRep register -->
     <v-card v-if="parsed?.kind === 'drep-register'" ref="previewCardEl" class="mb-4">
       <v-card-text>
-        <h3 class="text-subtitle-1 mt-0 mb-2">Preview — Register DRep</h3>
+        <h3 class="text-subtitle-1 mt-0 mb-2">Preview: Register DRep</h3>
         <p class="text-body-2 text-medium-emphasis mb-3">
           The signer will hash the supplied transaction body (Blake2b-256) and produce two vkey witnesses: payment (fee + deposit) and DRep (cert authority). The DRep key must hash to the DRep id below or the signer refuses.
         </p>
@@ -58,7 +58,7 @@
           <div class="field-row">
             <div class="field"><div class="field-label">Change to payment</div><div class="field-value">{{ fmtAda(parsed.request.change_to_payment_address_lovelace) }}</div></div>
             <div class="field"><div class="field-label">Fee</div><div class="field-value">{{ fmtAda(parsed.request.fee_lovelace) }}</div></div>
-            <div class="field"><div class="field-label">TTL slot</div><div class="field-value">{{ Number(parsed.request.ttl_slot).toLocaleString() }}</div></div>
+            <div class="field"><div class="field-label">Valid until (TTL slot)</div><div class="field-value">{{ fmtTtl(parsed.request.ttl_slot) }}</div></div>
             <div class="field"><div class="field-label">Tx body size</div><div class="field-value">{{ txSize(parsed.request.tx_body_cbor_hex) }} bytes</div></div>
           </div>
         </div>
@@ -72,7 +72,7 @@
     <!-- Preview: DRep update -->
     <v-card v-if="parsed?.kind === 'drep-update'" ref="previewCardEl" class="mb-4">
       <v-card-text>
-        <h3 class="text-subtitle-1 mt-0 mb-2">Preview — Update / refresh DRep</h3>
+        <h3 class="text-subtitle-1 mt-0 mb-2">Preview: Update / refresh DRep</h3>
         <p class="text-body-2 text-medium-emphasis mb-3">
           The signer will hash the body and produce payment + DRep witnesses. This resets the activity counter (keep-alive) and, if an anchor is set, points the on-chain manifest at it.
         </p>
@@ -84,7 +84,7 @@
           <div class="field-row">
             <div class="field"><div class="field-label">Change to payment</div><div class="field-value">{{ fmtAda(parsed.request.change_to_payment_address_lovelace) }}</div></div>
             <div class="field"><div class="field-label">Fee</div><div class="field-value">{{ fmtAda(parsed.request.fee_lovelace) }}</div></div>
-            <div class="field"><div class="field-label">TTL slot</div><div class="field-value">{{ Number(parsed.request.ttl_slot).toLocaleString() }}</div></div>
+            <div class="field"><div class="field-label">Valid until (TTL slot)</div><div class="field-value">{{ fmtTtl(parsed.request.ttl_slot) }}</div></div>
             <div class="field"><div class="field-label">Tx body size</div><div class="field-value">{{ txSize(parsed.request.tx_body_cbor_hex) }} bytes</div></div>
           </div>
         </div>
@@ -98,7 +98,7 @@
     <!-- Preview: DRep retire -->
     <v-card v-if="parsed?.kind === 'drep-retire'" ref="previewCardEl" class="mb-4">
       <v-card-text>
-        <h3 class="text-subtitle-1 mt-0 mb-2">Preview — Retire DRep</h3>
+        <h3 class="text-subtitle-1 mt-0 mb-2">Preview: Retire DRep</h3>
         <p class="text-body-2 text-medium-emphasis mb-3">
           The signer will hash the body and produce payment + DRep witnesses. The deposit is refunded to the payment address.
         </p>
@@ -110,7 +110,7 @@
           <div class="field-row">
             <div class="field"><div class="field-label">Change to payment</div><div class="field-value">{{ fmtAda(parsed.request.change_to_payment_address_lovelace) }}</div></div>
             <div class="field"><div class="field-label">Fee</div><div class="field-value">{{ fmtAda(parsed.request.fee_lovelace) }}</div></div>
-            <div class="field"><div class="field-label">TTL slot</div><div class="field-value">{{ Number(parsed.request.ttl_slot).toLocaleString() }}</div></div>
+            <div class="field"><div class="field-label">Valid until (TTL slot)</div><div class="field-value">{{ fmtTtl(parsed.request.ttl_slot) }}</div></div>
             <div class="field"><div class="field-label">Tx body size</div><div class="field-value">{{ txSize(parsed.request.tx_body_cbor_hex) }} bytes</div></div>
           </div>
         </div>
@@ -124,7 +124,7 @@
     <!-- Preview: DRep vote -->
     <v-card v-if="parsed?.kind === 'drep-vote'" ref="previewCardEl" class="mb-4">
       <v-card-text>
-        <h3 class="text-subtitle-1 mt-0 mb-2">Preview — DRep governance vote</h3>
+        <h3 class="text-subtitle-1 mt-0 mb-2">Preview: DRep governance vote</h3>
         <p class="text-body-2 text-medium-emphasis mb-3">
           The signer will hash the body and produce payment + DRep witnesses. The DRep key must hash to the DRep id below or the signer refuses.
         </p>
@@ -138,7 +138,7 @@
           <div class="field-row">
             <div class="field"><div class="field-label">Change to payment</div><div class="field-value">{{ fmtAda(parsed.request.change_to_payment_address_lovelace) }}</div></div>
             <div class="field"><div class="field-label">Fee</div><div class="field-value">{{ fmtAda(parsed.request.fee_lovelace) }}</div></div>
-            <div class="field"><div class="field-label">TTL slot</div><div class="field-value">{{ Number(parsed.request.ttl_slot).toLocaleString() }}</div></div>
+            <div class="field"><div class="field-label">Valid until (TTL slot)</div><div class="field-value">{{ fmtTtl(parsed.request.ttl_slot) }}</div></div>
             <div class="field"><div class="field-label">Tx body size</div><div class="field-value">{{ txSize(parsed.request.tx_body_cbor_hex) }} bytes</div></div>
           </div>
         </div>
@@ -154,10 +154,30 @@
       <v-card-text>
         <h3 class="text-subtitle-1 mt-0 mb-2">Preview: Witness rationale (CIP-100)</h3>
         <p class="text-body-2 text-medium-emphasis mb-3">
-          This produces a CIP-100 author witness over the canonical body below, NOT a transaction. The signer hashes the exact bytes shown (Blake2b-256) and signs with your DRep key; the key must hash to the DRep id below or the signer refuses.
+          This produces a CIP-100 author witness over the rationale below, NOT a transaction. The signer hashes the exact bytes of the canonical body (Blake2b-256) and signs with your DRep key. The key must hash to the DRep id below or the signer refuses.
         </p>
         <div class="field-stack">
           <div class="field"><div class="field-label">Witness as DRep</div><div class="field-value"><code class="text-caption">{{ parsed.request.drep_id_bech32 }}</code></div></div>
+          <div class="field">
+            <div class="field-label">What the rationale says</div>
+            <p class="text-caption text-medium-emphasis mb-2">
+              Read by this signer from the bytes it is about to sign, not taken from the online tool. Check that this is the rationale you wrote, word for word.
+            </p>
+            <v-alert v-if="rationaleUnreadable.length" type="warning" density="compact" variant="tonal" class="mb-2">
+              {{ rationaleUnreadable.length }} line(s) of the canonical body could not be read as a statement. They are part of what is signed and are shown as they are:
+              <div v-for="(l, i) in rationaleUnreadable" :key="i" class="raw-line mt-1">{{ l.raw }}</div>
+            </v-alert>
+            <div v-if="rationaleContent.length" class="rationale-read">
+              <div v-for="(l, i) in rationaleContent" :key="i" class="rationale-line">
+                <div class="rationale-field" :title="l.predicate">{{ l.field }}<span v-if="l.kind === 'link'"> (link)</span></div>
+                <div class="rationale-value">{{ l.value }}</div>
+              </div>
+            </div>
+            <div v-else class="text-medium-emphasis">The canonical body carries no text.</div>
+            <p v-if="rationaleNodeCount" class="text-caption text-medium-emphasis mt-2 mb-0">
+              Plus {{ rationaleNodeCount }} statement(s) that only link the parts of the document together. They are in the canonical body below.
+            </p>
+          </div>
           <div class="field"><div class="field-label">Canonical body (exactly what is signed)</div><div class="field-value"><pre style="max-height: 280px; overflow: auto; white-space: pre-wrap; word-break: break-all; font-family: monospace; font-size: 0.72rem; margin: 0; color: rgba(255,255,255,0.8);">{{ parsed.request.canonical_body }}</pre></div></div>
         </div>
         <div class="d-flex justify-end mt-3" style="gap: 0.5rem;">
@@ -222,6 +242,9 @@
           <p class="text-body-2 mb-2">
             Type the same 4-digit PIN you entered on the online tool when you clicked Send to Signer. The signer hashes your input and refuses to sign if it does not match the PIN encoded in the encrypted payload.
           </p>
+          <p class="text-body-2 text-medium-emphasis mb-2">
+            The PIN only proves that you are present at this signer for this request. It says nothing about what the request does: the online tool knows the PIN too. Your protection is the preview you just read.
+          </p>
           <v-text-field v-model="pinInput" density="compact" variant="outlined" type="password" inputmode="numeric" maxlength="4" placeholder="0000" :error-messages="pinError ? [pinError] : []" hide-details="auto" autofocus style="max-width: 160px;" @keydown.enter="executeWithPin" />
         </v-card-text>
         <v-card-actions>
@@ -235,7 +258,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import QRCode from 'qrcode'
 import NotConfiguredCard from '../components/NotConfiguredCard.vue'
 import FundingInputs from '../components/FundingInputs.vue'
@@ -243,7 +266,7 @@ import NotPairedCard from '../components/NotPairedCard.vue'
 import QRScanner from '@drep-tools/shared-frontend/components/QRScanner.vue'
 import { QR_CYCLE_INTERVAL_MS } from '@drep-tools/shared-frontend/constants/timings'
 import { useNotificationStore } from '@drep-tools/shared-frontend/stores/notification'
-import { fmtAda } from '@drep-tools/shared-frontend/utils/format'
+import { fmtAda, fmtTtl } from '@drep-tools/shared-frontend/utils/format'
 import { extractError } from '@drep-tools/shared-frontend/utils/error'
 import RequestFingerprintBadge from '@drep-tools/shared-frontend/components/RequestFingerprintBadge.vue'
 import type {
@@ -260,7 +283,15 @@ type ParsedRequest =
   | { kind: 'drep-update'; request: DRepUpdateRequest }
   | { kind: 'drep-retire'; request: DRepRetireRequest }
   | { kind: 'drep-vote'; request: DRepVoteRequest }
-  | { kind: 'drep-witness'; request: DRepWitnessRequest }
+  | { kind: 'drep-witness'; request: DRepWitnessRequest; rationale: BodyLine[] }
+
+/** One line of the canonical body as the signer read it back from the bytes
+ *  to be signed (airgap-core `nquads::BodyLine`). */
+type BodyLine =
+  | { kind: 'text'; subject: string; field: string; predicate: string; value: string; language: string | null; datatype: string | null }
+  | { kind: 'link'; subject: string; field: string; predicate: string; value: string }
+  | { kind: 'node'; subject: string; field: string; predicate: string; value: string }
+  | { kind: 'unreadable'; raw: string }
 
 function formatVote(v: VoteChoice): string {
   return v === 'yes' ? 'Yes' : v === 'no' ? 'No' : 'Abstain'
@@ -272,6 +303,16 @@ function txSize(hex: string): number {
 const notify = useNotificationStore()
 
 const parsed = ref<ParsedRequest | null>(null)
+const rationaleLines = computed<BodyLine[]>(() =>
+  parsed.value?.kind === 'drep-witness' ? parsed.value.rationale ?? [] : [],
+)
+const rationaleContent = computed(() =>
+  rationaleLines.value.filter((l): l is Extract<BodyLine, { kind: 'text' | 'link' }> => l.kind === 'text' || l.kind === 'link'),
+)
+const rationaleUnreadable = computed(() =>
+  rationaleLines.value.filter((l): l is Extract<BodyLine, { kind: 'unreadable' }> => l.kind === 'unreadable'),
+)
+const rationaleNodeCount = computed(() => rationaleLines.value.filter((l) => l.kind === 'node').length)
 const requestFingerprint = ref<string | null>(null)
 const pinDialogOpen = ref(false)
 const pinInput = ref('')
@@ -452,6 +493,11 @@ onUnmounted(() => { if (qrTimer) clearInterval(qrTimer) })
 
 <style scoped>
 .field-stack { display: flex; flex-direction: column; gap: 0.85rem; }
+.raw-line { font-family: monospace; font-size: 0.72rem; word-break: break-all; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 4px; padding: 0.4rem 0.6rem; }
+.rationale-read { border: 1px solid rgba(var(--drep-gold-rgb, 255, 215, 0), 0.4); border-radius: 6px; padding: 0.6rem 0.8rem; background: rgba(255,255,255,0.03); }
+.rationale-line + .rationale-line { margin-top: 0.7rem; }
+.rationale-field { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; color: rgba(255, 255, 255, 0.55); }
+.rationale-value { font-size: 0.95rem; white-space: pre-wrap; word-break: break-word; color: #fff; }
 .field-row { display: flex; gap: 1.5rem; flex-wrap: wrap; }
 .field-row .field { flex: 1 1 auto; min-width: 120px; }
 .field-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; color: rgba(255, 255, 255, 0.55); margin-bottom: 0.15rem; }

@@ -100,7 +100,7 @@
           >Enlarge</v-btn>
         </div>
         <div style="flex: 1 1 auto; min-width: 0;">
-          <!-- Placeholder mirrors airgap-core's UR_TYPE_PAIRING tag ("spo-tools-pairing-v1"), shared across products — not a typo. -->
+          <!-- Placeholder mirrors airgap-core's UR_TYPE_PAIRING tag ("spo-tools-pairing-v1"), shared across products, not a typo. -->
           <v-textarea
             v-model="pasteInput"
             label="UR fragments from peer"
@@ -133,7 +133,7 @@
   <v-card v-if="pendingPeer || (info && info.paired)" class="mb-4">
     <v-card-text>
       <div class="text-medium-emphasis mb-1">
-        Compare with the other screen — the two strings must match exactly
+        Compare with the other screen: the two strings must match exactly
       </div>
       <div class="fingerprint-strip">
         {{ pendingPeer ? pendingPeer.fingerprint : info?.fingerprint }}
@@ -145,7 +145,7 @@
           prepend-icon="mdi-check"
           :loading="confirming"
           @click="confirmPending"
-        >Confirm — fingerprints match</v-btn>
+        >Confirm: fingerprints match</v-btn>
       </div>
       <div v-else class="d-flex justify-end mt-4" style="gap: 0.75rem;">
         <v-btn

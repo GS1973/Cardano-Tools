@@ -19,8 +19,8 @@ use crate::register::DRepRegisterRequest;
 use crate::retire::DRepRetireRequest;
 use crate::update::DRepUpdateRequest;
 use crate::validate::{
-    addr_bytes, anchor_matches_parts, assert_inputs_bind_to_request, assert_no_extra_fields_inner,
-    blake2b224, decode_body, output_pair, ValidationError,
+    addr_bytes, anchor_matches_parts, assert_fee_within_ceiling, assert_inputs_bind_to_request,
+    assert_no_extra_fields_inner, blake2b224, decode_body, output_pair, ValidationError,
 };
 use crate::vote::{DRepVoteRequest, VoteChoice};
 
@@ -34,7 +34,8 @@ fn drep_keyhash(bech32: &str) -> Result<[u8; 28], ValidationError> {
         .map_err(|e| ValidationError::BadAddress(bech32.to_string(), e.to_string()))
 }
 
-/// Fee equals request, TTL equals request and is not already in the past.
+/// Fee equals request and is within the signer's ceiling, TTL equals
+/// request and is not already in the past.
 fn check_fee_ttl(
     body: &TransactionBody,
     req_fee: u64,
@@ -44,6 +45,7 @@ fn check_fee_ttl(
     if body.fee != req_fee {
         return Err(ValidationError::Mismatch("fee"));
     }
+    assert_fee_within_ceiling(req_fee)?;
     if body.ttl != Some(req_ttl) {
         return Err(ValidationError::Mismatch("ttl"));
     }
@@ -252,14 +254,23 @@ pub fn validate_vote_body(body_bytes: &[u8], req: &DRepVoteRequest) -> Result<()
     let body = decode_body(body_bytes)?;
     assert_no_extra_fields_inner(&body, true, false)?;
     assert_inputs_bind_to_request(&body.inputs, &req.inputs, &req.payment_address_bech32)?;
-    check_fee_ttl(&body, req.fee_lovelace, req.ttl_slot, req.chain_context.current_slot)?;
+    check_fee_ttl(
+        &body,
+        req.fee_lovelace,
+        req.ttl_slot,
+        req.chain_context.current_slot,
+    )?;
     if body.certificates.is_some() {
         return Err(ValidationError::Mismatch("unexpected certificates"));
     }
     if body.withdrawals.is_some() {
         return Err(ValidationError::Mismatch("unexpected withdrawals"));
     }
-    single_change_output(&body, &req.payment_address_bech32, req.change_to_payment_address_lovelace)?;
+    single_change_output(
+        &body,
+        &req.payment_address_bech32,
+        req.change_to_payment_address_lovelace,
+    )?;
     let keyhash = drep_keyhash(&req.drep_id_bech32)?;
 
     let vps = body
@@ -315,7 +326,7 @@ pub fn validate_vote_body(body_bytes: &[u8], req: &DRepVoteRequest) -> Result<()
 /// verification key (blake2b-224) and checking it equals the request's
 /// DRep id. Without it a compromised online tool could craft a body acting
 /// as some DRep id and label the request with that id; the signer would
-/// bind body to request and sign — but the DRep key would not actually
+/// bind body to request and sign, but the DRep key would not actually
 /// authorise that DRep on-chain. Checking here makes the signer refuse
 /// before the DRep key ever touches the body.
 pub fn assert_drep_vkey_matches_id(
@@ -396,10 +407,19 @@ mod tests {
     }
 
     fn empty_input() -> TransactionInput {
-        TransactionInput { transaction_id: Hash::from([0u8; 32]), index: 0 }
+        TransactionInput {
+            transaction_id: Hash::from([0u8; 32]),
+            index: 0,
+        }
     }
 
-    fn base_body(certs: Option<NonEmptySet<Certificate>>, vps: Option<NonEmptyKeyValuePairs<Voter, NonEmptyKeyValuePairs<GovActionId, VotingProcedure>>>, change: u64) -> Vec<u8> {
+    fn base_body(
+        certs: Option<NonEmptySet<Certificate>>,
+        vps: Option<
+            NonEmptyKeyValuePairs<Voter, NonEmptyKeyValuePairs<GovActionId, VotingProcedure>>,
+        >,
+        change: u64,
+    ) -> Vec<u8> {
         let body = TransactionBody {
             inputs: Set::from(vec![empty_input()]),
             outputs: vec![coin_output(change)],
@@ -463,7 +483,11 @@ mod tests {
     }
     fn register_body(cred: StakeCredential, deposit: u64, anchor: Nullable<Anchor>) -> Vec<u8> {
         let cert = Certificate::RegDRepCert(cred, deposit, anchor);
-        base_body(Some(NonEmptySet::try_from(vec![cert]).unwrap()), None, CHANGE)
+        base_body(
+            Some(NonEmptySet::try_from(vec![cert]).unwrap()),
+            None,
+            CHANGE,
+        )
     }
 
     #[test]
@@ -479,7 +503,11 @@ mod tests {
     }
     #[test]
     fn register_rejects_wrong_credential() {
-        let body = register_body(StakeCredential::AddrKeyhash(Hash::from([0x99u8; 28])), DEPOSIT, anchor_some());
+        let body = register_body(
+            StakeCredential::AddrKeyhash(Hash::from([0x99u8; 28])),
+            DEPOSIT,
+            anchor_some(),
+        );
         let err = validate_register_body(&body, &register_req(Some(gov_anchor()))).unwrap_err();
         assert!(matches!(err, ValidationError::Mismatch("drep credential")));
     }
@@ -491,7 +519,11 @@ mod tests {
     }
     #[test]
     fn register_rejects_script_credential() {
-        let body = register_body(StakeCredential::ScriptHash(Hash::from(KEYHASH)), DEPOSIT, anchor_some());
+        let body = register_body(
+            StakeCredential::ScriptHash(Hash::from(KEYHASH)),
+            DEPOSIT,
+            anchor_some(),
+        );
         let err = validate_register_body(&body, &register_req(Some(gov_anchor()))).unwrap_err();
         assert!(matches!(err, ValidationError::Mismatch("drep credential")));
     }
@@ -515,20 +547,31 @@ mod tests {
     #[test]
     fn update_happy_path_keepalive_null_anchor() {
         let cert = Certificate::UpdateDRepCert(cred(), Nullable::Null);
-        let body = base_body(Some(NonEmptySet::try_from(vec![cert]).unwrap()), None, CHANGE);
+        let body = base_body(
+            Some(NonEmptySet::try_from(vec![cert]).unwrap()),
+            None,
+            CHANGE,
+        );
         validate_update_body(&body, &update_req(None)).expect("matches");
     }
     #[test]
     fn update_happy_path_new_manifest() {
         let cert = Certificate::UpdateDRepCert(cred(), anchor_some());
-        let body = base_body(Some(NonEmptySet::try_from(vec![cert]).unwrap()), None, CHANGE);
+        let body = base_body(
+            Some(NonEmptySet::try_from(vec![cert]).unwrap()),
+            None,
+            CHANGE,
+        );
         validate_update_body(&body, &update_req(Some(gov_anchor()))).expect("matches");
     }
     #[test]
     fn update_rejects_reg_cert() {
         let body = register_body(cred(), DEPOSIT, Nullable::Null);
         let err = validate_update_body(&body, &update_req(None)).unwrap_err();
-        assert!(matches!(err, ValidationError::Mismatch("not an UpdateDRepCert")));
+        assert!(matches!(
+            err,
+            ValidationError::Mismatch("not an UpdateDRepCert")
+        ));
     }
 
     // -- Retire --
@@ -550,13 +593,21 @@ mod tests {
     #[test]
     fn retire_happy_path() {
         let cert = Certificate::UnRegDRepCert(cred(), DEPOSIT);
-        let body = base_body(Some(NonEmptySet::try_from(vec![cert]).unwrap()), None, CHANGE + DEPOSIT);
+        let body = base_body(
+            Some(NonEmptySet::try_from(vec![cert]).unwrap()),
+            None,
+            CHANGE + DEPOSIT,
+        );
         validate_retire_body(&body, &retire_req()).expect("matches");
     }
     #[test]
     fn retire_rejects_wrong_refund() {
         let cert = Certificate::UnRegDRepCert(cred(), 1);
-        let body = base_body(Some(NonEmptySet::try_from(vec![cert]).unwrap()), None, CHANGE + DEPOSIT);
+        let body = base_body(
+            Some(NonEmptySet::try_from(vec![cert]).unwrap()),
+            None,
+            CHANGE + DEPOSIT,
+        );
         let err = validate_retire_body(&body, &retire_req()).unwrap_err();
         assert!(matches!(err, ValidationError::Mismatch("deposit refund")));
     }
@@ -583,7 +634,10 @@ mod tests {
     }
     fn vote_body(voter_hash: [u8; 28], vote: Vote, anchor: Nullable<Anchor>, idx: u32) -> Vec<u8> {
         let voter = Voter::DRepKey(Hash::from(voter_hash));
-        let gid = GovActionId { transaction_id: Hash::from(ACTION_HASH), action_index: idx };
+        let gid = GovActionId {
+            transaction_id: Hash::from(ACTION_HASH),
+            action_index: idx,
+        };
         let proc = VotingProcedure { vote, anchor };
         let inner = NonEmptyKeyValuePairs::Def(vec![(gid, proc)]);
         let vps = NonEmptyKeyValuePairs::Def(vec![(voter, inner)]);
@@ -635,6 +689,9 @@ mod tests {
     #[test]
     fn vkey_matches_id_rejects_wrong_key() {
         let err = assert_drep_vkey_matches_id(&drep_id(), &[0x07u8; 32]).unwrap_err();
-        assert!(matches!(err, ValidationError::Mismatch("drep key does not match drep id")));
+        assert!(matches!(
+            err,
+            ValidationError::Mismatch("drep key does not match drep id")
+        ));
     }
 }

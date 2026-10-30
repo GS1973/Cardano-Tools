@@ -28,7 +28,7 @@
         <template v-if="mode !== 'receive'">
           <h3 class="text-subtitle-1 mt-2 mb-2">DRep manifest (CIP-119, optional)</h3>
           <template v-if="preview.manifest_base_url">
-            <p class="text-caption text-medium-emphasis mb-2">Enter just the file name; the on-chain URL is composed from your configured base. The hash is the blake2b-256 of the document's contents — host it first, then compute. Leave the file name empty for no anchor.</p>
+            <p class="text-caption text-medium-emphasis mb-2">Enter just the file name. The on-chain URL is composed from your configured base. The hash is the blake2b-256 of the document's contents: host it first, then compute. Leave the file name empty for no anchor.</p>
             <v-text-field v-model="manifestFile" label="Manifest file name" placeholder="drep.jsonld" density="compact" variant="outlined" hide-details class="mb-2" />
             <p v-if="composedManifestUrl" class="text-caption text-medium-emphasis mb-2">Full URL (goes on-chain): <code style="word-break: break-all;">{{ composedManifestUrl }}</code></p>
             <div class="d-flex align-start" style="gap: 0.5rem;">

@@ -9,7 +9,7 @@ export const QR_CYCLE_INTERVAL_MS = 800
  *  than the online-tool's because air-gap state can change second-to-second. */
 export const SIGNER_STATUS_POLL_INTERVAL_MS = 30_000
 
-/** Default options for QRCode.toDataURL — keep the rendered QR sharp
+/** Default options for QRCode.toDataURL: keep the rendered QR sharp
  *  enough that a webcam decodes it from across the room. */
 export const QRCODE_OPTIONS = {
   margin: 1,

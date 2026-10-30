@@ -22,7 +22,7 @@ const anyForeign = computed(() =>
 
 <template>
   <div v-if="inputs && inputs.length" class="field">
-    <div class="field-label">Funding inputs ({{ inputs.length }}) — {{ fmtAda(total) }} total</div>
+    <div class="field-label">Funding inputs ({{ inputs.length }}): {{ fmtAda(total) }} total</div>
     <div class="field-value">
       <div
         v-for="(i, idx) in inputs"
@@ -30,7 +30,7 @@ const anyForeign = computed(() =>
         class="d-flex align-start justify-space-between"
         style="gap: 0.75rem;"
       >
-        <!-- Verification aid: the operator must be able to compare the full tx hash and #index — never truncate. -->
+        <!-- Verification aid: the operator must be able to compare the full tx hash and #index, never truncate. -->
         <code class="text-caption" style="word-break: break-all;">{{ i.tx_hash_hex }}#{{ i.tx_index }}</code>
         <span class="text-caption text-no-wrap">{{ fmtAda(i.amount_lovelace) }}</span>
       </div>

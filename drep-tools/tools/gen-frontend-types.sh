@@ -8,7 +8,7 @@
 # shared/frontend/src/types/core-wire.ts and the cross-file import in
 # wire.ts is a (broken) relative path. A plain `cargo test --workspace`
 # runs the export tests in parallel, which both truncates the per-type
-# file (a write race) and leaves the broken relative import — never commit
+# file (a write race) and leaves the broken relative import, never commit
 # those. The committed bindings are produced ONLY by this script, which:
 #   0. refreshes airgap-core's canonical core-wire.ts (the neutral types),
 #   1. regenerates the DRep bindings single-threaded (no truncation race),
@@ -17,7 +17,7 @@
 # Unlike spo-tools, the ts_rs cross-crate scatter
 # (shared/frontend/src/types/core-wire.ts) is a committed snapshot in this
 # repo, so it is regenerated in place rather than deleted, and the --check
-# mode diffs it too — a drift between the snapshot and airgap-core's Rust
+# mode diffs it too: a drift between the snapshot and airgap-core's Rust
 # source fails the check.
 #
 # The role-neutral error types are re-exported by the hand-written
@@ -29,8 +29,8 @@
 # source instead of rewriting them: it regenerates the DRep bindings, diffs
 # them against the working tree, restores the tree, and exits non-zero on
 # drift. Run it locally before committing a wire-type change; it is also
-# the command CI's "Frontend type-binding drift" step runs (airgap-core is
-# a path dependency, so it is already checked out alongside this repo).
+# the command the monorepo CI's "Frontend type-binding drift" step runs
+# (airgap-core sits beside this folder there, as it does in development).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

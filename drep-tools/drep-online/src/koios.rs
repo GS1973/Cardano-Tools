@@ -14,6 +14,17 @@ pub enum KoiosError {
     Http(#[from] reqwest::Error),
     #[error("field `{0}` was null or unparseable")]
     BadField(&'static str),
+    #[error("response body decode failed: {0}")]
+    Decode(String),
+    #[error("too many rows from Koios for `{0}`")]
+    TooManyRows(&'static str),
+    #[error("protocol parameter `{name}` = {value} is outside the range {min}..={max}")]
+    OutOfBand {
+        name: &'static str,
+        value: u64,
+        min: u64,
+        max: u64,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -31,7 +42,7 @@ const MAX_ATTEMPTS: u32 = 4;
 /// Longest single pause between attempts. `Retry-After` comes from an
 /// unauthenticated upstream; without a cap a hostile or misconfigured
 /// Koios URL replying `429 Retry-After: 999999999` would park the handler
-/// future — and the operator's browser request — indefinitely.
+/// future, and the operator's browser request, indefinitely.
 const MAX_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(10);
 
 async fn send_with_retry(
@@ -101,7 +112,12 @@ pub struct Tip {
 
 pub async fn tip(client: &reqwest::Client, base_url: &str) -> Result<Tip, KoiosError> {
     let url = format!("{base_url}/tip");
-    let tips: Vec<Tip> = send_with_retry(client.get(&url)).await?.error_for_status()?.json().await?;
+    let tips: Vec<Tip> = json_capped(
+        send_with_retry(client.get(&url))
+            .await?
+            .error_for_status()?,
+    )
+    .await?;
     tips.into_iter().next().ok_or(KoiosError::BadField("tip"))
 }
 
@@ -162,6 +178,11 @@ struct AddressesRequest<'a> {
 /// Rows per page when paginating Koios array responses (its PostgREST cap).
 const PAGE_ROWS: usize = 1000;
 
+/// Most pages read from one paginated Koios query: 100,000 rows, far more
+/// than any real address or pool has. A provider that keeps returning full
+/// pages is cut off here instead of growing the process without limit.
+const MAX_PAGES: usize = 100;
+
 pub async fn address_utxos(
     client: &reqwest::Client,
     base_url: &str,
@@ -169,9 +190,12 @@ pub async fn address_utxos(
 ) -> Result<Vec<Utxo>, KoiosError> {
     // `_extended: true` is required: Koios only populates `asset_list` in the
     // extended response, and the change output must preserve those assets.
-    let body = AddressesRequest { _addresses: &[address], _extended: true };
+    let body = AddressesRequest {
+        _addresses: &[address],
+        _extended: true,
+    };
     // Koios caps array responses at 1000 rows, so a single request silently
-    // truncates the UTxO set of a busy address — and with it the spendable
+    // truncates the UTxO set of a busy address, and with it the spendable
     // total and the change output. Page via `offset` until a short page
     // marks the end.
     let mut all: Vec<Utxo> = Vec::new();
@@ -180,25 +204,90 @@ pub async fn address_utxos(
         let url = format!(
             "{base_url}/address_utxos?order=tx_hash.asc,tx_index.asc&limit={PAGE_ROWS}&offset={offset}"
         );
-        let page: Vec<Utxo> =
-            send_with_retry(client.post(&url).json(&body)).await?.error_for_status()?.json().await?;
+        let page: Vec<Utxo> = json_capped(
+            send_with_retry(client.post(&url).json(&body))
+                .await?
+                .error_for_status()?,
+        )
+        .await?;
         let short_page = page.len() < PAGE_ROWS;
         all.extend(page);
         if short_page {
             return Ok(all);
+        }
+        if offset / PAGE_ROWS + 1 >= MAX_PAGES {
+            return Err(KoiosError::TooManyRows("address_utxos"));
         }
         offset += PAGE_ROWS;
     }
 }
 
 // ---------------------------------------------------------------------------
-// epoch_params — current protocol parameters (drep_deposit, drep_activity)
+// protocol parameters: fee coefficients and min-UTxO cost.
+// `/cli_protocol_params` returns a single cardano-cli-format object.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProtocolParams {
+    /// Fee per byte of transaction (`txFeePerByte`).
+    #[serde(rename = "txFeePerByte")]
+    pub min_fee_a: u64,
+    /// Flat fee constant (`txFeeFixed`).
+    #[serde(rename = "txFeeFixed")]
+    pub min_fee_b: u64,
+    /// Lovelace cost per byte of a UTxO (`utxoCostPerByte`), which drives min-ADA.
+    #[serde(rename = "utxoCostPerByte")]
+    pub utxo_cost_per_byte: u64,
+}
+
+impl ProtocolParams {
+    /// Refuse protocol parameters outside the range the Cardano constitution's
+    /// guardrails allow on mainnet. The provider is not trusted: these values
+    /// drive the fee and the min-ADA change, and a parameter the network could
+    /// never have adopted is a provider fault, so it is named as one here.
+    pub fn check_band(&self) -> Result<(), KoiosError> {
+        let band: [(&'static str, u64, u64, u64); 3] = [
+            ("txFeePerByte", self.min_fee_a, 30, 1_000),
+            ("txFeeFixed", self.min_fee_b, 100_000, 10_000_000),
+            ("utxoCostPerByte", self.utxo_cost_per_byte, 3_000, 6_500),
+        ];
+        for (name, value, min, max) in band {
+            if value < min || value > max {
+                return Err(KoiosError::OutOfBand {
+                    name,
+                    value,
+                    min,
+                    max,
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+pub async fn protocol_params(
+    client: &reqwest::Client,
+    base_url: &str,
+) -> Result<ProtocolParams, KoiosError> {
+    let url = format!("{base_url}/cli_protocol_params");
+    let params: ProtocolParams = json_capped(
+        send_with_retry(client.get(&url))
+            .await?
+            .error_for_status()?,
+    )
+    .await?;
+    params.check_band()?;
+    Ok(params)
+}
+
+// ---------------------------------------------------------------------------
+// epoch_params: current protocol parameters (drep_deposit, drep_activity)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct EpochParams {
     /// DRep registration deposit, lovelace (string on the wire). Null in
-    /// pre-Conway epochs, hence Option — Koios returns a row per epoch.
+    /// pre-Conway epochs, hence Option: Koios returns a row per epoch.
     #[serde(default)]
     pub drep_deposit: Option<String>,
     /// Epochs of inactivity before a DRep goes dormant.
@@ -206,18 +295,30 @@ pub struct EpochParams {
     pub drep_activity: Option<u64>,
 }
 
-pub async fn epoch_params(client: &reqwest::Client, base_url: &str) -> Result<EpochParams, KoiosError> {
+pub async fn epoch_params(
+    client: &reqwest::Client,
+    base_url: &str,
+) -> Result<EpochParams, KoiosError> {
     // Fetch only the latest epoch. Koios returns a row for every epoch and the
     // pre-Conway rows carry null DRep params, which would otherwise break
     // decoding the whole array into a non-null `drep_deposit`.
     let url = format!("{base_url}/epoch_params?order=epoch_no.desc&limit=1");
-    let rows: Vec<EpochParams> =
-        send_with_retry(client.get(&url)).await?.error_for_status()?.json().await?;
-    rows.into_iter().next().ok_or(KoiosError::BadField("epoch_params"))
+    let rows: Vec<EpochParams> = json_capped(
+        send_with_retry(client.get(&url))
+            .await?
+            .error_for_status()?,
+    )
+    .await?;
+    rows.into_iter()
+        .next()
+        .ok_or(KoiosError::BadField("epoch_params"))
 }
 
 /// Current DRep registration deposit in lovelace, parsed from epoch_params.
-pub async fn drep_deposit_lovelace(client: &reqwest::Client, base_url: &str) -> Result<u64, KoiosError> {
+pub async fn drep_deposit_lovelace(
+    client: &reqwest::Client,
+    base_url: &str,
+) -> Result<u64, KoiosError> {
     let p = epoch_params(client, base_url).await?;
     p.drep_deposit
         .ok_or(KoiosError::BadField("drep_deposit"))?
@@ -226,7 +327,7 @@ pub async fn drep_deposit_lovelace(client: &reqwest::Client, base_url: &str) -> 
 }
 
 // ---------------------------------------------------------------------------
-// drep_info — registration state of a DRep (deposit, status, voting power)
+// drep_info: registration state of a DRep (deposit, status, voting power)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -265,14 +366,20 @@ pub async fn drep_info(
     drep_id_bech32: &str,
 ) -> Result<Option<DrepInfo>, KoiosError> {
     let url = format!("{base_url}/drep_info");
-    let body = DrepIdsRequest { _drep_ids: &[drep_id_bech32] };
-    let rows: Vec<DrepInfo> =
-        send_with_retry(client.post(&url).json(&body)).await?.error_for_status()?.json().await?;
+    let body = DrepIdsRequest {
+        _drep_ids: &[drep_id_bech32],
+    };
+    let rows: Vec<DrepInfo> = json_capped(
+        send_with_retry(client.post(&url).json(&body))
+            .await?
+            .error_for_status()?,
+    )
+    .await?;
     Ok(rows.into_iter().next())
 }
 
 // ---------------------------------------------------------------------------
-// proposal_list — open governance actions, for the DRep vote picker.
+// proposal_list: open governance actions, for the DRep vote picker.
 // A DRep votes on every action type, so unlike the SPO tool nothing is
 // filtered out here.
 // ---------------------------------------------------------------------------
@@ -295,16 +402,39 @@ pub struct Proposal {
     pub meta_json: Option<serde_json::Value>,
 }
 
-pub async fn proposal_list(client: &reqwest::Client, base_url: &str) -> Result<Vec<Proposal>, KoiosError> {
-    let url = format!(
-        "{base_url}/proposal_list?ratified_epoch=is.null&enacted_epoch=is.null&dropped_epoch=is.null&expired_epoch=is.null&order=block_time.desc"
-    );
-    let rows: Vec<Proposal> = send_with_retry(client.get(&url)).await?.error_for_status()?.json().await?;
-    Ok(rows)
+pub async fn proposal_list(
+    client: &reqwest::Client,
+    base_url: &str,
+) -> Result<Vec<Proposal>, KoiosError> {
+    // Koios caps array responses at 1000 rows. Page via `offset` until a
+    // short page marks the end, so an open action can never silently fall
+    // off the picker (the explicit `order` keeps pagination stable).
+    let mut all: Vec<Proposal> = Vec::new();
+    let mut offset: usize = 0;
+    loop {
+        let url = format!(
+            "{base_url}/proposal_list?ratified_epoch=is.null&enacted_epoch=is.null&dropped_epoch=is.null&expired_epoch=is.null&order=block_time.desc&limit={PAGE_ROWS}&offset={offset}"
+        );
+        let page: Vec<Proposal> = json_capped(
+            send_with_retry(client.get(&url))
+                .await?
+                .error_for_status()?,
+        )
+        .await?;
+        let short_page = page.len() < PAGE_ROWS;
+        all.extend(page);
+        if short_page {
+            return Ok(all);
+        }
+        if offset / PAGE_ROWS + 1 >= MAX_PAGES {
+            return Err(KoiosError::TooManyRows("proposal_list"));
+        }
+        offset += PAGE_ROWS;
+    }
 }
 
 // ---------------------------------------------------------------------------
-// submittx — broadcast a signed transaction.
+// submittx: broadcast a signed transaction.
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, thiserror::Error)]
@@ -316,10 +446,13 @@ pub enum SubmitError {
 }
 
 /// Read at most `max` bytes from a response body, chunk by chunk, dropping
-/// the rest once the cap is reached — bounds how much a misbehaving or
+/// the rest once the cap is reached: bounds how much a misbehaving or
 /// malicious upstream can force the process to allocate. Also used by the
 /// manifest-hash handler in `util.rs` (same cap-the-untrusted-body concern).
-pub(crate) async fn read_capped(mut resp: reqwest::Response, max: usize) -> Result<Vec<u8>, reqwest::Error> {
+pub(crate) async fn read_capped(
+    mut resp: reqwest::Response,
+    max: usize,
+) -> Result<Vec<u8>, reqwest::Error> {
     let mut buf = Vec::new();
     while let Some(chunk) = resp.chunk().await? {
         let remaining = max.saturating_sub(buf.len());
@@ -335,7 +468,25 @@ pub(crate) async fn read_capped(mut resp: reqwest::Response, max: usize) -> Resu
     Ok(buf)
 }
 
-pub async fn submit_tx(client: &reqwest::Client, base_url: &str, tx_cbor: &[u8]) -> Result<String, SubmitError> {
+/// Generous byte cap for a Koios JSON response. The largest body this tool
+/// reads (a full page of UTxOs with their native assets) sits far below this. The cap bounds what a misbehaving
+/// or malicious upstream can make the process allocate.
+const MAX_JSON_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
+
+/// Decode a JSON response body with the byte cap applied, so the unbounded
+/// buffering of `Response::json` is never used on an upstream body.
+async fn json_capped<T: serde::de::DeserializeOwned>(
+    resp: reqwest::Response,
+) -> Result<T, KoiosError> {
+    let bytes = read_capped(resp, MAX_JSON_RESPONSE_BYTES).await?;
+    serde_json::from_slice(&bytes).map_err(|e| KoiosError::Decode(e.to_string()))
+}
+
+pub async fn submit_tx(
+    client: &reqwest::Client,
+    base_url: &str,
+    tx_cbor: &[u8],
+) -> Result<String, SubmitError> {
     const MAX_RESPONSE_BYTES: usize = 64 * 1024;
     let url = format!("{base_url}/submittx");
     let resp = send_with_retry(
@@ -349,13 +500,18 @@ pub async fn submit_tx(client: &reqwest::Client, base_url: &str, tx_cbor: &[u8])
     let bytes = read_capped(resp, MAX_RESPONSE_BYTES).await?;
     let body = String::from_utf8_lossy(&bytes).into_owned();
     if !status.is_success() {
-        return Err(SubmitError::Rejected { status: status.as_u16(), body });
+        return Err(SubmitError::Rejected {
+            status: status.as_u16(),
+            body,
+        });
     }
     let cleaned = body.trim().trim_matches('"').to_string();
     if cleaned.len() != 64 || !cleaned.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(SubmitError::Rejected {
             status: 200,
-            body: format!("upstream returned 200 but body is not a 64-char hex tx hash: {cleaned:?}"),
+            body: format!(
+                "upstream returned 200 but body is not a 64-char hex tx hash: {cleaned:?}"
+            ),
         });
     }
     Ok(cleaned)
@@ -432,15 +588,108 @@ mod tests {
             ]
         }"#;
         let u: Utxo = serde_json::from_str(json).unwrap();
-        assert!(matches!(u.assets(), Err(KoiosError::BadField("asset quantity"))));
+        assert!(matches!(
+            u.assets(),
+            Err(KoiosError::BadField("asset quantity"))
+        ));
     }
 
     #[test]
     fn address_utxos_requests_extended() {
         // Koios returns asset_list only when _extended is true; guard against
         // a regression to false that would silently drop every native asset.
-        let body = AddressesRequest { _addresses: &["addr1"], _extended: true };
+        let body = AddressesRequest {
+            _addresses: &["addr1"],
+            _extended: true,
+        };
         let j = serde_json::to_string(&body).unwrap();
         assert!(j.contains("\"_extended\":true"), "{j}");
+    }
+
+    /// A stand-in Koios that answers every request with `body`.
+    async fn stub_koios(body: String) -> String {
+        let app = axum::Router::new().fallback(move || {
+            let body = body.clone();
+            async move {
+                (
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    body,
+                )
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn a_provider_that_never_stops_paging_is_cut_off() {
+        let row = r#"{"tx_hash":"aa","tx_index":0,"value":"1000000","asset_list":null}"#;
+        let page = format!("[{}]", vec![row; PAGE_ROWS].join(","));
+        let base = stub_koios(page).await;
+        let err = address_utxos(&reqwest::Client::new(), &base, "addr1test")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, KoiosError::TooManyRows(_)), "{err}");
+    }
+
+    #[tokio::test]
+    async fn an_oversized_response_is_refused() {
+        let base = stub_koios(" ".repeat(MAX_JSON_RESPONSE_BYTES + 1) + "[]").await;
+        let err = tip(&reqwest::Client::new(), &base).await.unwrap_err();
+        assert!(matches!(err, KoiosError::Decode(_)), "{err}");
+    }
+
+    #[test]
+    fn protocol_params_outside_the_guardrails_are_refused() {
+        let ok = ProtocolParams {
+            min_fee_a: 44,
+            min_fee_b: 155_381,
+            utxo_cost_per_byte: 4_310,
+        };
+        assert!(ok.check_band().is_ok());
+        for bad in [
+            ProtocolParams {
+                min_fee_a: 29,
+                ..ok.clone()
+            },
+            ProtocolParams {
+                min_fee_a: 1_001,
+                ..ok.clone()
+            },
+            ProtocolParams {
+                min_fee_b: 99_999,
+                ..ok.clone()
+            },
+            ProtocolParams {
+                utxo_cost_per_byte: 6_501,
+                ..ok.clone()
+            },
+        ] {
+            assert!(
+                matches!(bad.check_band(), Err(KoiosError::OutOfBand { .. })),
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn open_proposals_past_the_first_page_are_all_read() {
+        // A Koios with 1001 open actions: a full first page, then one more.
+        let app = axum::Router::new().fallback(|uri: axum::http::Uri| async move {
+            let q = uri.query().unwrap_or("");
+            let n = if q.contains("offset=0") { PAGE_ROWS } else { 1 };
+            let row = r#"{"proposal_id":null,"proposal_tx_hash":"aa","proposal_index":0,"proposal_type":"InfoAction"}"#;
+            let body = format!("[{}]", vec![row; n].join(","));
+            ([(axum::http::header::CONTENT_TYPE, "application/json")], body)
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let rows = proposal_list(&reqwest::Client::new(), &format!("http://{addr}"))
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), PAGE_ROWS + 1);
     }
 }

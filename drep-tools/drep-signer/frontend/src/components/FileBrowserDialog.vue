@@ -150,7 +150,7 @@ watch(
       navigate(props.initialPath.replace(/\/[^/]*$/, ''))
       return
     }
-    // Open on the first populated root instead of a bare, empty /media —
+    // Open on the first populated root instead of a bare, empty /media:
     // USB drives mount under /run/media/<user> (or /media/<user>) here.
     const target = available.find((r) => r.entry_count > 0) ?? available[0]
     navigate(target ? target.path : '')

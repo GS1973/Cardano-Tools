@@ -1,4 +1,4 @@
-//! DRep governance vote request/result — wire format between online tool
+//! DRep governance vote request/result: wire format between online tool
 //! and signer.
 //!
 //! One `Voter::DRepKey(keyhash)` casting one vote on one governance action,
@@ -13,8 +13,8 @@ use ts_rs::TS;
 use crate::anchor::GovAnchor;
 use crate::chain_context::ChainContext;
 use crate::utxo::UtxoInput;
-use crate::witness::VkeyWitness;
 use crate::wire_kind::DrepWireKind;
+use crate::witness::VkeyWitness;
 
 /// The DRep's ballot on a governance action. Maps 1:1 to
 /// `pallas_primitives::conway::Vote` at body-build time.
@@ -50,7 +50,7 @@ pub struct DRepVoteRequest {
     /// the DRep key that signs must hash to it.
     pub drep_id_bech32: String,
     /// Governance action being voted on: 64-char hex of the proposal tx
-    /// hash plus the proposal index — the action id the protocol uses.
+    /// hash plus the proposal index: the action id the protocol uses.
     pub action_tx_hash_hex: String,
     pub action_index: u32,
     pub vote: VoteChoice,

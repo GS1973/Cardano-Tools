@@ -1,4 +1,4 @@
-//! Setup endpoints — read / write signer config + per-key validation.
+//! Setup endpoints: read / write signer config + per-key validation.
 //!
 //! `/api/signer-config` returns a redacted view (paths / hex secrets are
 //! never reflected back). `/api/test-load` validates a single key path the
@@ -22,7 +22,7 @@ pub(crate) struct SignerConfigResponse {
 
 #[derive(serde::Serialize)]
 pub(crate) struct DRepIdInfo {
-    /// CIP-129 `drep1...` (header byte + hash) — the modern form.
+    /// CIP-129 `drep1...` (header byte + hash): the modern form.
     pub cip129: String,
     /// Legacy CIP-105 `drep1...` (bare hash).
     pub cip105: String,
@@ -36,7 +36,9 @@ fn derive_drep_id(c: &config::SignerConfig) -> Option<DRepIdInfo> {
     let path = c.drep_skey.as_deref()?;
     let vkey: [u8; 32] = match shared::cardano_keys::load_skey(std::path::Path::new(path)).ok()? {
         shared::cardano_keys::CardanoKey::DRep { seed_32 } => {
-            ed25519_dalek::SigningKey::from_bytes(&seed_32).verifying_key().to_bytes()
+            ed25519_dalek::SigningKey::from_bytes(&seed_32)
+                .verifying_key()
+                .to_bytes()
         }
         shared::cardano_keys::CardanoKey::DRepExtended { pubkey_32, .. } => pubkey_32,
         _ => return None,
@@ -82,11 +84,14 @@ pub(crate) async fn signer_config_get() -> axum::Json<SignerConfigResponse> {
 }
 
 /// Merge a Setup POST body over the existing on-disk config. The X25519
-/// crypto fields are never accepted from the body — the pairing handlers
+/// crypto fields are never accepted from the body, the pairing handlers
 /// are their only writers (they reject low-order peer points and require
-/// the operator-confirmed fingerprint) — so they are always carried over
+/// the operator-confirmed fingerprint), so they are always carried over
 /// from disk, and anything the client supplied is discarded.
-fn merge_setup_body(body: config::SignerConfig, existing: config::SignerConfig) -> config::SignerConfig {
+fn merge_setup_body(
+    body: config::SignerConfig,
+    existing: config::SignerConfig,
+) -> config::SignerConfig {
     let mut merged = body;
     merged.own_crypto_skey_hex = existing.own_crypto_skey_hex;
     merged.peer_crypto_pubkey_hex = existing.peer_crypto_pubkey_hex;
@@ -110,10 +115,12 @@ fn vetted_key_path(field: &'static str, value: &mut Option<String>) -> Result<()
     if trimmed.is_empty() {
         return Ok(());
     }
-    let canonical = std::path::PathBuf::from(trimmed).canonicalize().map_err(|e| {
-        tracing::error!(error = %e, field, "signer-config canonicalize failed");
-        ErrorEnvelope::invalid(format!("{field}: path does not exist"))
-    })?;
+    let canonical = std::path::PathBuf::from(trimmed)
+        .canonicalize()
+        .map_err(|e| {
+            tracing::error!(error = %e, field, "signer-config canonicalize failed");
+            ErrorEnvelope::invalid(format!("{field}: path does not exist"))
+        })?;
     let allowed = crate::handlers::list_dir::list_dir_allowed_roots();
     if !allowed.iter().any(|root| canonical.starts_with(root)) {
         tracing::error!(path = %canonical.display(), field, "signer-config path outside allow-list");
@@ -166,7 +173,9 @@ pub(crate) async fn signer_test_load(
         Ok(c) => c,
         Err(e) => {
             tracing::error!(error = %e, "test-load canonicalize failed");
-            return axum::Json(validate::ValidationResult::Error { message: "path does not exist".into() });
+            return axum::Json(validate::ValidationResult::Error {
+                message: "path does not exist".into(),
+            });
         }
     };
     let allowed = crate::handlers::list_dir::list_dir_allowed_roots();
@@ -196,7 +205,7 @@ pub(crate) struct GenerateDrepKeyBody {
 #[serde(tag = "status", rename_all = "snake_case")]
 pub(crate) enum GenerateDrepKeyResponse {
     Ok {
-        /// CIP-129 `drep1...` — carry this to the online tool's Setup.
+        /// CIP-129 `drep1...`: carry this to the online tool's Setup.
         drep_id: String,
         /// Legacy CIP-105 `drep1...`.
         drep_id_legacy: String,
@@ -217,11 +226,17 @@ pub(crate) async fn generate_drep_key(
 ) -> axum::Json<GenerateDrepKeyResponse> {
     let trimmed = body.output_dir.trim();
     if trimmed.is_empty() {
-        return axum::Json(GenerateDrepKeyResponse::Error { message: "output directory is required".into() });
+        return axum::Json(GenerateDrepKeyResponse::Error {
+            message: "output directory is required".into(),
+        });
     }
     let canonical = match std::path::PathBuf::from(trimmed).canonicalize() {
         Ok(c) => c,
-        Err(_) => return axum::Json(GenerateDrepKeyResponse::Error { message: "directory does not exist".into() }),
+        Err(_) => {
+            return axum::Json(GenerateDrepKeyResponse::Error {
+                message: "directory does not exist".into(),
+            })
+        }
     };
     let allowed = crate::handlers::list_dir::list_dir_allowed_roots();
     if !allowed.iter().any(|root| canonical.starts_with(root)) {
@@ -239,7 +254,9 @@ pub(crate) async fn generate_drep_key(
         }),
         Err(e) => {
             tracing::warn!(error = %e, "drep keygen failed");
-            axum::Json(GenerateDrepKeyResponse::Error { message: e.to_string() })
+            axum::Json(GenerateDrepKeyResponse::Error {
+                message: e.to_string(),
+            })
         }
     }
 }
@@ -331,7 +348,7 @@ mod tests {
 
     #[test]
     fn vetted_key_path_rejects_existing_path_outside_roots() {
-        // An existing, readable file outside /media, /mnt, /run/media —
+        // An existing, readable file outside /media, /mnt, /run/media:
         // exactly the probe shape the allow-list forecloses.
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("drep.skey");

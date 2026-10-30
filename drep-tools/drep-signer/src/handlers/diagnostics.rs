@@ -5,12 +5,12 @@
 //! liveness probe can hit the binary without exercising any state.
 
 use crate::{airgap, state};
-use std::sync::atomic::Ordering;
 
 #[derive(serde::Serialize)]
 pub(crate) struct SignerStatus {
-    /// True when no active non-loopback network adapter is detected.
-    air_gapped: bool,
+    /// True when the last sample saw no traffic on a connected interface,
+    /// false when it did, and absent (null) before the first sample.
+    air_gapped: Option<bool>,
     /// Last-known chain snapshot, persisted from the most recent request
     /// the signer received. None until the first signing session.
     chain_context: Option<shared::chain_context::ChainContext>,
@@ -18,16 +18,19 @@ pub(crate) struct SignerStatus {
     last_synced_unix: Option<u64>,
 }
 
-
 pub(crate) async fn signer_status() -> axum::Json<SignerStatus> {
-    let s = state::load(&state::state_path());
+    // Display only: a damaged state file shows as "never synced" here and
+    // is refused where it matters, in the signing path.
+    let s = state::load(&state::state_path()).unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "failed to load signer state for status");
+        state::SignerState::default()
+    });
     axum::Json(SignerStatus {
-        air_gapped: airgap::AIR_GAPPED.load(Ordering::Relaxed),
+        air_gapped: airgap::air_gapped(),
         chain_context: s.last_chain_context,
         last_synced_unix: s.last_synced_unix,
     })
 }
-
 
 pub(crate) async fn signer_health() -> &'static str {
     "ok"

@@ -10,11 +10,11 @@ Self-hosted, open source, Linux-only. No Docker, no SaaS, no mobile apps.
 
 A companion to **SPO Tools**, built on the same role-neutral `airgap-core`
 library. The two are fully separate: neither contains a line of the
-other's code; both depend only on `airgap-core`.
+other's code. Both depend only on `airgap-core`.
 
 ## Status
 
-**v1.1.0**: full lifecycle (register / update / retire / vote) plus a
+**v1.1.2**: full lifecycle (register / update / retire / vote) plus a
 rationale-witness step (the CIP-100 author witness for a vote's CIP-136
 metadata),
 body-level validation on the signer, and an end-to-end encrypted channel
@@ -83,19 +83,23 @@ spends the input, the **DRep** key authorises the action.
 ## Rationale witness (CIP-136)
 
 A separate step, not a transaction. The online tool canonicalises a
-hand-authored CIP-136 rationale body (URDNA2015, per CIP-100); the signer
+hand-authored CIP-136 rationale body (URDNA2015, per CIP-100). The signer
 signs its blake2b-256 with the DRep key, and the tool injects the CIP-100
 author witness into the file. Without it a vote's anchor renders as raw
 JSON instead of a rationale. The signer refuses to sign anything that is
 not a canonical governance-metadata body, so the DRep key cannot be
-steered into signing a transaction. The signed rationale is published
+steered into signing a transaction. Because the canonicalisation runs in
+the online tool's browser, the signer does not take the rationale on
+trust: it reads the text back out of the exact bytes it is about to sign
+and shows it field by field, next to the raw canonical body. Check there
+that it is the rationale you wrote. The signed rationale is published
 like any manifest and referenced by the vote's anchor.
 
 The channel between online tool and signer is **end-to-end encrypted**.
 After a one-time visual-fingerprint pairing, every QR / UR payload is
 sealed with X25519 + XChaCha20-Poly1305. A passive observer of the QR
-channel sees only ciphertext; substitution mid-channel is rejected by the
-AEAD tag; a man-in-the-middle during the pairing dance is caught visually
+channel sees only ciphertext. Substitution mid-channel is rejected by the
+AEAD tag. A man-in-the-middle during the pairing dance is caught visually
 because the 16-byte fingerprint on the two screens will not agree.
 Operations refuse to run unpaired.
 
@@ -142,7 +146,7 @@ DRep ids are accepted in either **CIP-105** (bare 28-byte key hash) or
 **CIP-129** (header byte + hash) bech32. Script-based DReps are rejected,
 this tool manages a key-based DRep only.
 
-Hardware-wallet owners (Ledger, Trezor) are not supported; the signer
+Hardware-wallet owners are not supported. The signer
 works with CLI-exported keys only.
 
 ## Limitations (v1.1)
@@ -162,7 +166,7 @@ works with CLI-exported keys only.
 ## Funding address
 
 The payment address funds the transaction fee and, for registration, the
-deposit; change returns to it. The signer is air-gapped and cannot consult
+deposit. Change returns to it. The signer is air-gapped and cannot consult
 the chain, so it trusts the inputs the online tool claims it picked,
 mitigated by three independent layers:
 
@@ -170,10 +174,20 @@ mitigated by three independent layers:
    addresses) alongside each request. The signer's body validator
    cross-checks `body.inputs` against `request.inputs` and rejects a tx
    whose inputs do not all sit at the request's `payment_address`.
-2. The signer screen shows exactly what is being signed (DRep id,
-   deposit / refund / vote, fee, change) for **visual review** before the
-   DRep key is used.
-3. An operator **PIN** (typed on the online tool, retyped on the signer)
+2. The signer refuses to sign unless the request's payment address is
+   controlled by the **payment key it holds** (the address's payment
+   credential must be the hash of that key). The change can therefore only
+   return to an address your own key can spend from, whatever the online
+   tool names. Only the payment part is checked: an enterprise address or
+   a base address with any stake part works.
+3. The signer never signs a **fee above 3 ADA**, whatever the request
+   says. An honest fee is about 0.17 to 0.2 ADA.
+4. The signer decodes the transaction body and holds it against the
+   request **before** showing anything, so the screen shows exactly what
+   is being signed (DRep id, deposit / refund / vote, fee, change) for
+   **visual review** before the DRep key is used. A request that
+   misdescribes its body is refused without a preview.
+5. An operator **PIN** (typed on the online tool, retyped on the signer)
    gates the actual signing.
 
 Use a payment address you control directly. The registration deposit is
@@ -184,7 +198,9 @@ locked by the protocol and refunded in full when you retire.
 The signer process makes a best effort to detect that the host has no
 network: at startup it shows a banner asking you to acknowledge the
 air-gap, and a small monitor checks for IP traffic on connected interfaces
-periodically. **Treat both as advisory.** A determined attacker who already
+periodically (the top bar then reads "No network detected", which is all it
+can honestly say). **Treat both as advisory.** No operation consults the
+monitor. It gates nothing. A determined attacker who already
 has shell access on the signer host can bring the network back up after the
 check passes, and file-transfer channels (VM shared folders,
 USB-passthrough, Bluetooth OBEX) are not detected at all. The trust anchor
@@ -194,7 +210,7 @@ software detecting that separation.
 ## Governance metadata (CIP-119 + CIP-136)
 
 Register and update can anchor a **CIP-119** manifest (identity,
-motivations, objectives, qualifications); each vote can anchor a
+motivations, objectives, qualifications). Each vote can anchor a
 **CIP-136** rationale (summary, statement, references). An anchor is a URL
 plus the blake2b-256 hash of the document, so the host need not be trusted,
 the hash makes the document tamper-evident. Host the documents anywhere
@@ -202,11 +218,16 @@ stable (your own domain, IPFS). Never move or delete an anchored document:
 the hash still matches but the pointer dangles and explorers can no longer
 fetch the rationale.
 
+The online tool can fetch a document URL to compute that hash for you. It
+only fetches over `https://` and only from public internet addresses (not
+from this machine, your local network or a cloud metadata address, also not
+through a redirect), and it does not send your Koios API key along.
+
 ## Workspace layout
 
 - `shared/`, DRep wire types + body validators
 - `shared-frontend/`, Vue transport components, stores, formatters (the
-  DRep tool's own copy; never imports SPO Tools)
+  DRep tool's own copy, never imports SPO Tools)
 - `drep-online/`, internet-connected coordinator (Axum + Pallas + Koios)
 - `drep-signer/`, air-gapped signer (Pallas, no network)
 
@@ -223,7 +244,7 @@ parent/
 
 ## Build
 
-Requires Rust 1.85+ (stable) and Node.js 22+, with `airgap-core` checked
+Requires Rust 1.95+ (stable) and Node.js 22+, with `airgap-core` checked
 out as a sibling directory.
 
 ```bash
@@ -237,7 +258,7 @@ cargo build --release
 ```
 
 Binaries land in `target/release/drep-tools-online` and
-`target/release/drep-tools-signer`. Both are self-contained; no further
+`target/release/drep-tools-signer`. Both are self-contained. No further
 runtime dependencies besides a modern Linux kernel and a recent browser to
 drive the web UI.
 
@@ -248,9 +269,10 @@ cargo test --workspace
 ```
 
 Covers the CIP-105/129 id decoder, the four body validators plus the
-DRep-key↔id binding, builder↔validator round-trips for all four
-operations, and an end-to-end sign that verifies both Ed25519 witnesses
-over the body hash.
+DRep-key↔id binding, the payment-key↔address binding and the fee ceiling,
+builder↔validator round-trips for all four operations, an end-to-end sign
+that verifies both Ed25519 witnesses over the body hash, and the guard on
+the document fetch.
 
 ## Quick start
 
@@ -262,13 +284,14 @@ over the body hash.
 ```
 
 `--listen ADDR:PORT` is required: there is no default port, both for
-security and to allow side-by-side instances. For preprod or self-hosted
+security and to allow side-by-side instances. For a self-hosted mainnet
 Koios, add `--koios-url URL` (defaults to `https://api.koios.rest/api/v1`).
+The URL must be https, or plain http on the same machine.
 
 Open the URL printed at startup and complete Setup with your DRep id and
 payment address. Saved to `~/.config/drep-tools/online.json`. The optional
 Koios API key field is attached as `Authorization: Bearer <key>` to every
-Koios request; restart the online tool for a new key to take effect.
+Koios request. Restart the online tool for a new key to take effect.
 
 ### Signer (air-gapped machine)
 
@@ -287,7 +310,7 @@ operation. Config is saved to `~/.config/drep-tools/signer.json`.
 ### Pair the two sides (one-time, ~1 min)
 
 Once both binaries are running, open **Pairing** in either UI. Each side
-displays its own public key as a static QR; scan the other side's QR with
+displays its own public key as a static QR. Scan the other side's QR with
 the camera, and visually compare the 16-byte fingerprint shown on both
 screens. They must match exactly. Click Confirm and the channel is
 permanently encrypted between this online tool and this signer. Operations
@@ -344,8 +367,8 @@ private keys.
 
 You alone are responsible for:
 
-- safeguarding your signing keys (DRep, payment);
-- verifying every transaction on the signer's screen before you approve it;
+- safeguarding your signing keys (DRep, payment),
+- verifying every transaction on the signer's screen before you approve it,
 - the outcome of any transaction you sign and submit.
 
 To the fullest extent permitted by law, the author accepts no liability for

@@ -48,7 +48,9 @@ pub fn validate(path: Option<&str>, expected: KeyKind) -> ValidationResult {
                 ValidationResult::WrongRole
             }
         },
-        Err(e) => ValidationResult::Error { message: friendly_error(&e) },
+        Err(e) => ValidationResult::Error {
+            message: friendly_error(&e),
+        },
     }
 }
 
@@ -73,18 +75,52 @@ impl KeyKind {
     }
 }
 
-fn friendly_error(e: &KeyLoadError) -> String {
+/// The one description of a key-load failure, used by Setup and by the
+/// signing path alike. It never echoes file content: everything except the
+/// permission hint comes from the loader's own redacted form (a parse error
+/// can quote the file, a hex error the offending character, and a header
+/// mismatch the first bytes of what may be a raw key).
+pub(crate) fn friendly_error(e: &KeyLoadError) -> String {
     match e {
-        KeyLoadError::Io(io) if io.kind() == std::io::ErrorKind::NotFound => "file not found".into(),
         KeyLoadError::Io(io) if io.kind() == std::io::ErrorKind::PermissionDenied => {
-            "permission denied — is the encrypted USB mounted with read access?".into()
+            "permission denied: is the encrypted USB mounted with read access?".into()
         }
-        // Redact serde_json detail — it can echo file contents at the parse
-        // error location, a file-content oracle for an XSS-chaining attacker.
-        KeyLoadError::Json(_) => "file is not valid cardano-cli skey JSON".into(),
-        KeyLoadError::InsecureMode { mode } => format!(
-            "skey file is readable by group or other (mode 0o{mode:o}); chmod 600 before retrying"
-        ),
-        _ => e.to_string(),
+        _ => e.redacted(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn message_for(content: &str) -> String {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(content.as_bytes()).unwrap();
+        match validate(Some(f.path().to_str().unwrap()), KeyKind::Payment) {
+            ValidationResult::Error { message } => message,
+            other => panic!("expected an error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn load_errors_never_echo_file_content() {
+        let m = message_for("c0ffee11 is not json");
+        assert!(!m.contains("c0ffee11"), "{m}");
+        // A raw key without its CBOR header: the header bytes are key bytes.
+        let m = message_for(&format!(
+            r#"{{"type":"PaymentSigningKeyShelley_ed25519","description":"","cborHex":"c0ffee11{}"}}"#,
+            "ab".repeat(28)
+        ));
+        assert!(!m.contains("c0ff"), "{m}");
+        assert!(m.contains("CBOR header"), "{m}");
+    }
+
+    #[test]
+    fn missing_file_is_named() {
+        match validate(Some("/nonexistent/payment.skey"), KeyKind::Payment) {
+            ValidationResult::Error { message } => assert_eq!(message, "file not found"),
+            other => panic!("expected an error, got {other:?}"),
+        }
     }
 }

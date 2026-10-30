@@ -62,7 +62,7 @@ export function useSignFlow(base: string) {
     qr.stopCycle()
   }
 
-  /** Any form edit after a build invalidates the QR — scanning a stale
+  /** Any form edit after a build invalidates the QR: scanning a stale
    *  request would sign something the operator no longer sees. */
   function invalidate() {
     if (!request.value && !result.value) return
@@ -128,12 +128,12 @@ export function useSignFlow(base: string) {
       const data = await r.json()
       // Correlate the result with the pending request: a leftover result for
       // an earlier (cancelled/rebuilt) request must not be shown as ready to
-      // submit — its witnesses sign a different tx body.
+      // submit: its witnesses sign a different tx body.
       if (bodyHashHex.value && data.body_hash_hex !== bodyHashHex.value) {
-        throw new Error('signed result does not match the pending request (tx body hash differs) — scan the result for the request shown above')
+        throw new Error('signed result does not match the pending request (tx body hash differs): scan the result for the request shown above')
       }
       result.value = data
-      notify.success(`Signed result received — ${result.value!.witnesses.length} witnesses`)
+      notify.success(`Signed result received: ${result.value!.witnesses.length} witnesses`)
       qr.stopCycle()
     } catch (e: unknown) {
       resultError.value = e instanceof Error ? e.message : String(e)
@@ -160,7 +160,7 @@ export function useSignFlow(base: string) {
         throw new Error(err.message)
       }
       submitted.value = await r.json()
-      notify.success(`Tx submitted — ${submitted.value!.tx_hash.slice(0, 16)}…`)
+      notify.success(`Tx submitted: ${submitted.value!.tx_hash.slice(0, 16)}…`)
     } catch (e: unknown) {
       submitError.value = e instanceof Error ? e.message : String(e)
     } finally {

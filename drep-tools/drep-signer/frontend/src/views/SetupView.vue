@@ -6,7 +6,7 @@
   <v-alert type="info" density="compact" variant="tonal" class="mb-4">
     v1.0 supports <code>cardano-cli</code> generated <code>.skey</code> files only.
     Mnemonic wallets: export once with <code>cardano-address</code> to skey format.
-    This signer holds <strong>only</strong> the DRep key and a payment key — never the pool cold key.
+    This signer holds <strong>only</strong> the DRep key and a payment key, never the pool cold key.
   </v-alert>
 
   <v-card class="mb-4">
@@ -18,7 +18,7 @@
       <p class="text-caption text-medium-emphasis mb-3">
         Creates a fresh Ed25519 DRep key pair on this air-gapped machine and writes
         <code>drep.skey</code> + <code>drep.vkey</code> to the chosen directory. Pick a folder on
-        your encrypted removable drive — the key never leaves this machine. Skip this if you
+        your encrypted removable drive: the key never leaves this machine. Skip this if you
         already generated a key (with cardano-cli, or derived from your wallet mnemonic).
       </p>
       <div class="d-flex align-start" style="gap: 0.5rem;">
@@ -33,14 +33,14 @@
       </div>
       <v-alert v-if="genError" type="error" density="compact" variant="tonal" class="mt-3">{{ genError }}</v-alert>
       <v-alert v-if="genResult" type="success" density="compact" variant="tonal" class="mt-3">
-        <div class="mb-1"><strong>DRep key generated.</strong> Your DRep id — carry this to the online tool's Setup:</div>
+        <div class="mb-1"><strong>DRep key generated.</strong> Your DRep id (carry this to the online tool's Setup):</div>
         <div class="d-flex align-center" style="gap: 0.5rem;">
           <code class="text-caption" style="word-break: break-all;">{{ genResult.drep_id }}</code>
           <v-btn size="x-small" variant="text" prepend-icon="mdi-content-copy" @click="copyDrepId">Copy</v-btn>
         </div>
         <div class="text-caption mt-1">Signing key written to <code>{{ genResult.skey_path }}</code> and filled in below.</div>
         <div v-if="paymentAtRisk" class="text-caption mt-1">
-          <strong>Re-enter the payment signing key path below before saving</strong> — saved paths are never displayed, so it could not be pre-filled.
+          <strong>Re-enter the payment signing key path below before saving</strong>: saved paths are never displayed, so it could not be pre-filled.
         </div>
       </v-alert>
       <FileBrowserDialog v-model="genBrowseOpen" title="Select output directory" :initial-path="genDir || null" select-dir @pick="(p) => { genDir = p }" />
@@ -79,7 +79,7 @@
         </tbody>
       </v-table>
       <div v-if="locked" class="text-caption text-medium-emphasis">
-        Key paths are not displayed. Click Edit to type new paths; saving overwrites the stored values.
+        Key paths are not displayed. Click Edit to type new paths. Saving overwrites the stored values.
       </div>
 
       <template v-if="!locked">
@@ -250,7 +250,7 @@ async function save() {
     }
     const d = await r.json()
     // Clear the form inputs first (paths are not shown once locked), then
-    // apply the server's re-validated status — doing it the other way round
+    // apply the server's re-validated status: doing it the other way round
     // wipes the just-validated bulbs back to "missing".
     clearForm()
     applyStatus(d)
@@ -270,7 +270,7 @@ const genError = ref<string | null>(null)
 const genResult = ref<{ drep_id: string; drep_id_legacy: string; skey_path: string; vkey_path: string } | null>(null)
 const genBrowseOpen = ref(false)
 // True while an edit session started by keygen would overwrite a previously
-// configured payment key path (valid or not — the file may merely be
+// configured payment key path (valid or not: the file may merely be
 // unreadable right now) that the form cannot repopulate because it is redacted.
 const paymentAtRisk = ref(false)
 
@@ -290,7 +290,7 @@ async function generateKey() {
     notify.success('DRep key generated on this machine')
     // Land the new path in the key form (unlock first if already saved).
     // Saved key paths are redacted, so unlocking cannot repopulate the
-    // payment path — remember it was configured so save() refuses to
+    // payment path: remember it was configured so save() refuses to
     // silently wipe it with a null.
     if (locked.value) {
       // 'missing' is the only status meaning no path is saved; a path in

@@ -44,7 +44,7 @@
           <h3 class="text-subtitle-1 mt-0 mb-0">Witnessed, ready to publish</h3>
         </div>
         <p class="text-body-2 text-medium-emphasis mb-3">
-          Download the finished rationale and publish it at your manifest URL. Then cast the vote on the Vote screen; it computes the anchor hash from the published file for you.
+          Download the finished rationale and publish it at your manifest URL. Then cast the vote on the Vote screen. It computes the anchor hash from the published file for you.
         </p>
         <v-table density="compact" class="mb-3"><tbody>
           <tr><td class="text-medium-emphasis" style="width: 280px;">Witness public key</td><td><code class="text-caption">{{ witness.witness.public_key_hex }}</code></td></tr>

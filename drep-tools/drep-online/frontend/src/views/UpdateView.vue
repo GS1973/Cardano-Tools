@@ -15,7 +15,7 @@
       <v-card-text v-else-if="!preview" class="text-medium-emphasis">Loading…</v-card-text>
       <v-card-text v-else>
         <v-alert v-if="!preview.is_registered" type="warning" density="compact" variant="tonal" class="mb-4">This DRep is not registered on-chain. Register first.</v-alert>
-        <v-alert v-else type="info" density="compact" variant="tonal" class="mb-4">An update resets the <strong>drep_activity</strong> counter (20 epochs) — a bare keep-alive with no new manifest is valid and keeps your voting power from going dormant.</v-alert>
+        <v-alert v-else type="info" density="compact" variant="tonal" class="mb-4">An update resets the <strong>drep_activity</strong> counter (20 epochs): a bare keep-alive with no new manifest is valid and keeps your voting power from going dormant.</v-alert>
 
         <v-table density="compact" class="mb-3"><tbody>
           <tr><td class="text-medium-emphasis" style="width: 280px;">DRep id</td><td><code class="text-caption">{{ preview.drep_id }}</code></td></tr>
@@ -28,7 +28,7 @@
         <template v-if="mode !== 'receive'">
           <h3 class="text-subtitle-1 mt-2 mb-2">New manifest (CIP-119, optional)</h3>
           <template v-if="preview.manifest_base_url">
-            <p class="text-caption text-medium-emphasis mb-2">Enter just the file name; the on-chain URL is composed from your configured base. Host the updated document first, then compute the hash. Leave the file name empty for a bare keep-alive (no anchor).</p>
+            <p class="text-caption text-medium-emphasis mb-2">Enter just the file name. The on-chain URL is composed from your configured base. Host the updated document first, then compute the hash. Leave the file name empty for a bare keep-alive (no anchor).</p>
             <v-text-field v-model="manifestFile" label="Manifest file name" placeholder="drep.jsonld" density="compact" variant="outlined" hide-details class="mb-2" />
             <p v-if="composedManifestUrl" class="text-caption text-medium-emphasis mb-2">Full URL (goes on-chain): <code style="word-break: break-all;">{{ composedManifestUrl }}</code></p>
             <div class="d-flex align-start" style="gap: 0.5rem;">
@@ -56,7 +56,7 @@
     </SignFlowPanels>
 
     <PreSendConfirm v-model="confirmSendOpen" title="Confirm DRep update" @confirm="onConfirmSend">
-      <p class="text-body-2 text-medium-emphasis mb-2">You are about to update <code v-if="preview">{{ preview.drep_id }}</code> (resets the activity counter; sets the manifest anchor to {{ composedManifestUrl ? 'the new document' : 'null — keep-alive' }}). Your DRep key signs.</p>
+      <p class="text-body-2 text-medium-emphasis mb-2">You are about to update <code v-if="preview">{{ preview.drep_id }}</code> (resets the activity counter, sets the manifest anchor to {{ composedManifestUrl ? 'the new document' : 'null: keep-alive' }}). Your DRep key signs.</p>
     </PreSendConfirm>
   </SignFlowLayout>
 </template>

@@ -7,73 +7,27 @@
 //! touches the network. Errors flow through `SignExecuteError` which has a
 //! central `impl From<_> for ErrorEnvelope` for the HTTP layer.
 
-use ed25519_dalek::{Signer, SigningKey};
-use pallas_crypto::key::ed25519::SecretKeyExtended;
+use ed25519_dalek::SigningKey;
 use shared::error::ErrorEnvelope;
 use shared::witness::{DrepWitnessRole, VkeyWitness};
 use tracing::debug;
 use zeroize::Zeroizing;
 
-/// Signing-key material the core signers consume. Plain keys are standard
-/// 32-byte Ed25519 seeds; extended keys are BIP32-Ed25519 (kL‖kR) from a
-/// converted mnemonic wallet, signed scalar-based.
-pub(crate) enum SigningKeyMaterial {
-    Plain(Zeroizing<[u8; 32]>),
-    Extended {
-        esk: Zeroizing<[u8; 64]>,
-        /// Public key embedded in the skey envelope; the loader verified
-        /// it equals the key derived from `esk`.
-        expected_pubkey: [u8; 32],
-    },
-}
+pub(crate) use shared::signing::SigningKeyMaterial;
 
-impl SigningKeyMaterial {
-    /// The 32-byte Ed25519 verification key this material signs under.
-    fn verifying_key(&self) -> Result<[u8; 32], SignExecuteError> {
-        match self {
-            SigningKeyMaterial::Plain(seed) => {
-                Ok(SigningKey::from_bytes(seed).verifying_key().to_bytes())
-            }
-            SigningKeyMaterial::Extended { esk, expected_pubkey } => {
-                let sk = SecretKeyExtended::from_bytes(**esk).map_err(|_| {
-                    SignExecuteError::WrongRole(
-                        "extended key failed Ed25519-BIP32 structure check".into(),
-                    )
-                })?;
-                let derived = sk.public_key();
-                if derived.as_ref() != expected_pubkey.as_slice() {
-                    return Err(SignExecuteError::WrongRole("extended key public-key drift".into()));
-                }
-                let mut out = [0u8; 32];
-                out.copy_from_slice(derived.as_ref());
-                Ok(out)
-            }
-        }
+impl From<shared::signing::MaterialError> for SignExecuteError {
+    fn from(e: shared::signing::MaterialError) -> Self {
+        SignExecuteError::WrongRole(e.to_string())
     }
 }
 
 /// Validate an extended (BIP32-Ed25519) key and wrap it as signing
-/// material. Checks the Ed25519-BIP32 bit structure and that the embedded
-/// public key matches the one derived from the secret — an integrity
-/// cross-check that catches a corrupted or inconsistent extended skey
-/// before it is ever used to sign.
+/// material (`SigningKeyMaterial::extended` in airgap-core).
 fn extended_material(
     esk_64: [u8; 64],
     pubkey_32: [u8; 32],
 ) -> Result<SigningKeyMaterial, SignExecuteError> {
-    let sk = SecretKeyExtended::from_bytes(esk_64).map_err(|_| {
-        SignExecuteError::WrongRole("extended key failed Ed25519-BIP32 structure check".into())
-    })?;
-    let derived = sk.public_key();
-    if derived.as_ref() != pubkey_32.as_slice() {
-        return Err(SignExecuteError::WrongRole(
-            "extended key public-key mismatch (corrupt skey?)".into(),
-        ));
-    }
-    Ok(SigningKeyMaterial::Extended {
-        esk: Zeroizing::new(esk_64),
-        expected_pubkey: pubkey_32,
-    })
+    Ok(SigningKeyMaterial::extended(esk_64, pubkey_32)?)
 }
 
 impl From<SignExecuteError> for ErrorEnvelope {
@@ -87,7 +41,9 @@ impl From<SignExecuteError> for ErrorEnvelope {
                 tracing::warn!(detail = %msg, "rejecting request as invalid");
                 ErrorEnvelope::invalid("invalid request payload")
             }
-            SignExecuteError::WrongRole(_) => ErrorEnvelope::invalid("configured key has wrong role"),
+            SignExecuteError::WrongRole(_) => {
+                ErrorEnvelope::invalid("configured key has wrong role")
+            }
             SignExecuteError::LoadDrep { source, .. }
             | SignExecuteError::LoadPayment { source, .. } => {
                 tracing::error!(error = %source, "key load failed");
@@ -99,14 +55,20 @@ impl From<SignExecuteError> for ErrorEnvelope {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SignExecuteError {
-    #[error("DRep signing key path not configured — visit Setup")]
+    #[error("DRep signing key path not configured. Visit Setup")]
     DrepNotConfigured,
-    #[error("payment signing key path not configured — visit Setup")]
+    #[error("payment signing key path not configured. Visit Setup")]
     PaymentNotConfigured,
     #[error("could not load DRep key from {path}: {source}")]
-    LoadDrep { path: String, source: Box<dyn std::error::Error + Send + Sync> },
+    LoadDrep {
+        path: String,
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
     #[error("could not load payment key from {path}: {source}")]
-    LoadPayment { path: String, source: Box<dyn std::error::Error + Send + Sync> },
+    LoadPayment {
+        path: String,
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
     #[error("tx body does not match request: {0}")]
     BodyValidation(String),
     #[error("tx body cbor hex is invalid: {0}")]
@@ -115,12 +77,19 @@ pub(crate) enum SignExecuteError {
     WrongRole(String),
 }
 
+/// A key-load failure as the signing path carries and logs it: the same
+/// redacted description Setup shows, never the raw loader error (which can
+/// quote file content).
+fn redacted(e: &shared::cardano_keys::KeyLoadError) -> Box<dyn std::error::Error + Send + Sync> {
+    crate::validate::friendly_error(e).into()
+}
+
 pub(crate) fn load_payment_material_from_path(
     path: &std::path::Path,
 ) -> Result<SigningKeyMaterial, SignExecuteError> {
     let key = shared::cardano_keys::load_skey(path).map_err(|e| SignExecuteError::LoadPayment {
         path: path.display().to_string(),
-        source: Box::new(e),
+        source: redacted(&e),
     })?;
     match key {
         shared::cardano_keys::CardanoKey::Payment { seed_32 } => {
@@ -140,7 +109,7 @@ pub(crate) fn load_drep_material_from_path(
 ) -> Result<SigningKeyMaterial, SignExecuteError> {
     let key = shared::cardano_keys::load_skey(path).map_err(|e| SignExecuteError::LoadDrep {
         path: path.display().to_string(),
-        source: Box::new(e),
+        source: redacted(&e),
     })?;
     match key {
         shared::cardano_keys::CardanoKey::DRep { seed_32 } => {
@@ -166,30 +135,13 @@ fn build_vkey_witness(
     material: &SigningKeyMaterial,
     body_hash: &[u8; 32],
 ) -> Result<VkeyWitness, SignExecuteError> {
-    let (vkey_hex, signature_hex) = match material {
-        SigningKeyMaterial::Plain(seed) => {
-            let sk = SigningKey::from_bytes(seed);
-            let sig = sk.sign(body_hash);
-            (
-                hex::encode(sk.verifying_key().to_bytes()),
-                hex::encode(sig.to_bytes()),
-            )
-        }
-        SigningKeyMaterial::Extended { esk, expected_pubkey } => {
-            let sk = SecretKeyExtended::from_bytes(**esk).map_err(|_| {
-                SignExecuteError::WrongRole(
-                    "extended key failed Ed25519-BIP32 structure check".into(),
-                )
-            })?;
-            let derived = sk.public_key();
-            if derived.as_ref() != expected_pubkey.as_slice() {
-                return Err(SignExecuteError::WrongRole("extended key public-key drift".into()));
-            }
-            let sig = sk.sign(body_hash);
-            (hex::encode(derived.as_ref()), hex::encode(sig.as_ref()))
-        }
-    };
-    Ok(VkeyWitness { role, vkey_hex, signature_hex })
+    let (vkey, sig) = material.sign(body_hash)?;
+    let (vkey_hex, signature_hex) = (hex::encode(vkey), hex::encode(sig));
+    Ok(VkeyWitness {
+        role,
+        vkey_hex,
+        signature_hex,
+    })
 }
 
 /// Sign a 32-byte payload hash with `material`, returning (vkey, signature).
@@ -198,28 +150,7 @@ fn sign_hash(
     material: &SigningKeyMaterial,
     hash: &[u8; 32],
 ) -> Result<([u8; 32], [u8; 64]), SignExecuteError> {
-    match material {
-        SigningKeyMaterial::Plain(seed) => {
-            let sk = SigningKey::from_bytes(seed);
-            Ok((sk.verifying_key().to_bytes(), sk.sign(hash).to_bytes()))
-        }
-        SigningKeyMaterial::Extended { esk, expected_pubkey } => {
-            let sk = SecretKeyExtended::from_bytes(**esk).map_err(|_| {
-                SignExecuteError::WrongRole(
-                    "extended key failed Ed25519-BIP32 structure check".into(),
-                )
-            })?;
-            let derived = sk.public_key();
-            if derived.as_ref() != expected_pubkey.as_slice() {
-                return Err(SignExecuteError::WrongRole("extended key public-key drift".into()));
-            }
-            let mut vkey = [0u8; 32];
-            vkey.copy_from_slice(derived.as_ref());
-            let mut sig = [0u8; 64];
-            sig.copy_from_slice(sk.sign(hash).as_ref());
-            Ok((vkey, sig))
-        }
-    }
+    Ok(material.sign(hash)?)
 }
 
 /// Produce a CIP-100 author witness over a governance-metadata canonical
@@ -230,12 +161,10 @@ pub(crate) fn sign_witness_core(
     req: &shared::witness_doc::DRepWitnessRequest,
     drep_material: SigningKeyMaterial,
 ) -> Result<shared::witness_doc::DRepWitnessResult, SignExecuteError> {
-    shared::validate::assert_canonical_body_nquads(req.canonical_body.as_bytes())
-        .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))?;
+    let body_hash = check_witness_body(req)?;
     let drep_vkey = drep_material.verifying_key()?;
     shared::tx_validator::assert_drep_vkey_matches_id(&req.drep_id_bech32, &drep_vkey)
         .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))?;
-    let body_hash = shared::validate::blake2b256(req.canonical_body.as_bytes());
     let (vkey, sig) = sign_hash(&drep_material, &body_hash)?;
     Ok(shared::witness_doc::DRepWitnessResult {
         body_hash_hex: hex::encode(body_hash),
@@ -248,25 +177,30 @@ pub(crate) fn sign_witness_core(
 }
 
 fn body_hash_of(cbor_hex: &str) -> Result<(Vec<u8>, [u8; 32]), SignExecuteError> {
-    use blake2::digest::{Update, VariableOutput};
-    let body_bytes = hex::decode(cbor_hex).map_err(|e| SignExecuteError::BadCborHex(e.to_string()))?;
-    let mut hasher = blake2::Blake2bVar::new(32).expect("blake2b 256 init");
-    hasher.update(&body_bytes);
-    let mut body_hash = [0u8; 32];
-    hasher.finalize_variable(&mut body_hash).expect("blake2b 256 fin");
+    let body_bytes =
+        hex::decode(cbor_hex).map_err(|e| SignExecuteError::BadCborHex(e.to_string()))?;
+    let body_hash = shared::validate::blake2b256(&body_bytes);
     Ok((body_bytes, body_hash))
 }
 
-/// Common signing tail: bind the DRep key to the request's DRep id, hash
-/// the (already-validated) body, and produce Payment + DRep witnesses.
+/// Common signing tail: bind the DRep key to the request's DRep id and the
+/// payment key to the request's payment address, then produce Payment +
+/// DRep witnesses over the (already-validated) body hash. The validators
+/// send the change to the request's payment address; the payment-key check
+/// is what makes that address the operator's own, so a compromised online
+/// tool cannot collect the change at an address it names.
 fn sign_with_drep_binding(
     body_hash: &[u8; 32],
     drep_id_bech32: &str,
+    payment_address_bech32: &str,
     payment_material: &SigningKeyMaterial,
     drep_material: &SigningKeyMaterial,
 ) -> Result<(String, Vec<VkeyWitness>), SignExecuteError> {
     let drep_vkey = drep_material.verifying_key()?;
     shared::tx_validator::assert_drep_vkey_matches_id(drep_id_bech32, &drep_vkey)
+        .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))?;
+    let payment_vkey = payment_material.verifying_key()?;
+    shared::validate::assert_payment_key_controls_address(&payment_vkey, payment_address_bech32)
         .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))?;
     let witnesses = vec![
         build_vkey_witness(DrepWitnessRole::Payment, payment_material, body_hash)?,
@@ -275,21 +209,75 @@ fn sign_with_drep_binding(
     Ok((hex::encode(body_hash), witnesses))
 }
 
+// Body-to-request binding, per operation. These need no key: they decode
+// the body, hold every field against the request and return the body hash.
+// The preview runs them so that only a request whose body matches is ever
+// shown to the operator; signing runs them again before a key is used.
+
+pub(crate) fn check_register_body(
+    req: &shared::register::DRepRegisterRequest,
+) -> Result<[u8; 32], SignExecuteError> {
+    let (body_bytes, body_hash) = body_hash_of(&req.tx_body_cbor_hex)?;
+    shared::tx_validator::validate_register_body(&body_bytes, req)
+        .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))?;
+    Ok(body_hash)
+}
+
+pub(crate) fn check_update_body(
+    req: &shared::update::DRepUpdateRequest,
+) -> Result<[u8; 32], SignExecuteError> {
+    let (body_bytes, body_hash) = body_hash_of(&req.tx_body_cbor_hex)?;
+    shared::tx_validator::validate_update_body(&body_bytes, req)
+        .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))?;
+    Ok(body_hash)
+}
+
+pub(crate) fn check_retire_body(
+    req: &shared::retire::DRepRetireRequest,
+) -> Result<[u8; 32], SignExecuteError> {
+    let (body_bytes, body_hash) = body_hash_of(&req.tx_body_cbor_hex)?;
+    shared::tx_validator::validate_retire_body(&body_bytes, req)
+        .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))?;
+    Ok(body_hash)
+}
+
+pub(crate) fn check_vote_body(
+    req: &shared::vote::DRepVoteRequest,
+) -> Result<[u8; 32], SignExecuteError> {
+    let (body_bytes, body_hash) = body_hash_of(&req.tx_body_cbor_hex)?;
+    shared::tx_validator::validate_vote_body(&body_bytes, req)
+        .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))?;
+    Ok(body_hash)
+}
+
+/// The rationale-witness counterpart: the payload must be a CIP-100
+/// canonical body (never a transaction body). Returns the hash the witness
+/// signs.
+pub(crate) fn check_witness_body(
+    req: &shared::witness_doc::DRepWitnessRequest,
+) -> Result<[u8; 32], SignExecuteError> {
+    shared::validate::assert_canonical_body_nquads(req.canonical_body.as_bytes())
+        .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))?;
+    Ok(shared::validate::blake2b256(req.canonical_body.as_bytes()))
+}
+
 pub(crate) fn sign_register_core(
     req: &shared::register::DRepRegisterRequest,
     payment_material: SigningKeyMaterial,
     drep_material: SigningKeyMaterial,
 ) -> Result<shared::register::DRepRegisterResult, SignExecuteError> {
-    let (body_bytes, body_hash) = body_hash_of(&req.tx_body_cbor_hex)?;
-    shared::tx_validator::validate_register_body(&body_bytes, req)
-        .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))?;
+    let body_hash = check_register_body(req)?;
     let (body_hash_hex, witnesses) = sign_with_drep_binding(
         &body_hash,
         &req.drep_id_bech32,
+        &req.payment_address_bech32,
         &payment_material,
         &drep_material,
     )?;
-    Ok(shared::register::DRepRegisterResult { body_hash_hex, witnesses })
+    Ok(shared::register::DRepRegisterResult {
+        body_hash_hex,
+        witnesses,
+    })
 }
 
 pub(crate) fn sign_update_core(
@@ -297,16 +285,18 @@ pub(crate) fn sign_update_core(
     payment_material: SigningKeyMaterial,
     drep_material: SigningKeyMaterial,
 ) -> Result<shared::update::DRepUpdateResult, SignExecuteError> {
-    let (body_bytes, body_hash) = body_hash_of(&req.tx_body_cbor_hex)?;
-    shared::tx_validator::validate_update_body(&body_bytes, req)
-        .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))?;
+    let body_hash = check_update_body(req)?;
     let (body_hash_hex, witnesses) = sign_with_drep_binding(
         &body_hash,
         &req.drep_id_bech32,
+        &req.payment_address_bech32,
         &payment_material,
         &drep_material,
     )?;
-    Ok(shared::update::DRepUpdateResult { body_hash_hex, witnesses })
+    Ok(shared::update::DRepUpdateResult {
+        body_hash_hex,
+        witnesses,
+    })
 }
 
 pub(crate) fn sign_retire_core(
@@ -314,16 +304,18 @@ pub(crate) fn sign_retire_core(
     payment_material: SigningKeyMaterial,
     drep_material: SigningKeyMaterial,
 ) -> Result<shared::retire::DRepRetireResult, SignExecuteError> {
-    let (body_bytes, body_hash) = body_hash_of(&req.tx_body_cbor_hex)?;
-    shared::tx_validator::validate_retire_body(&body_bytes, req)
-        .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))?;
+    let body_hash = check_retire_body(req)?;
     let (body_hash_hex, witnesses) = sign_with_drep_binding(
         &body_hash,
         &req.drep_id_bech32,
+        &req.payment_address_bech32,
         &payment_material,
         &drep_material,
     )?;
-    Ok(shared::retire::DRepRetireResult { body_hash_hex, witnesses })
+    Ok(shared::retire::DRepRetireResult {
+        body_hash_hex,
+        witnesses,
+    })
 }
 
 pub(crate) fn sign_vote_core(
@@ -331,16 +323,18 @@ pub(crate) fn sign_vote_core(
     payment_material: SigningKeyMaterial,
     drep_material: SigningKeyMaterial,
 ) -> Result<shared::vote::DRepVoteResult, SignExecuteError> {
-    let (body_bytes, body_hash) = body_hash_of(&req.tx_body_cbor_hex)?;
-    shared::tx_validator::validate_vote_body(&body_bytes, req)
-        .map_err(|e| SignExecuteError::BodyValidation(e.to_string()))?;
+    let body_hash = check_vote_body(req)?;
     let (body_hash_hex, witnesses) = sign_with_drep_binding(
         &body_hash,
         &req.drep_id_bech32,
+        &req.payment_address_bech32,
         &payment_material,
         &drep_material,
     )?;
-    Ok(shared::vote::DRepVoteResult { body_hash_hex, witnesses })
+    Ok(shared::vote::DRepVoteResult {
+        body_hash_hex,
+        witnesses,
+    })
 }
 
 #[cfg(test)]
@@ -358,7 +352,8 @@ mod tests {
     use shared::utxo::UtxoInput;
     use shared::wire_kind::DrepWireKind;
 
-    const PAYMENT: &str = "addr1vyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqkdl5mw";
+    /// The payment key every signing test loads.
+    const PAYMENT_SEED: [u8; 32] = [9u8; 32];
     const DEPOSIT: u64 = 500_000_000;
     const FEE: u64 = 200_000;
     const TTL: u64 = 2_000_000;
@@ -373,11 +368,44 @@ mod tests {
         let mut data = vec![0x22u8];
         data.extend_from_slice(&keyhash);
         let hrp = bech32::Hrp::parse("drep").unwrap();
-        (bech32::encode::<bech32::Bech32>(hrp, &data).unwrap(), keyhash)
+        (
+            bech32::encode::<bech32::Bech32>(hrp, &data).unwrap(),
+            keyhash,
+        )
+    }
+
+    /// Mainnet address paying to the key of `payment_seed`: an enterprise
+    /// address, or a base address when a stake key seed is given.
+    fn address_of(payment_seed: &[u8; 32], stake_seed: Option<&[u8; 32]>) -> String {
+        use pallas_addresses::{
+            Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart,
+        };
+        let kh = |seed: &[u8; 32]| Hash::<28>::from(shared::validate::blake2b224(&vkey_of(seed)));
+        let delegation = match stake_seed {
+            Some(s) => ShelleyDelegationPart::key_hash(kh(s)),
+            None => ShelleyDelegationPart::Null,
+        };
+        ShelleyAddress::new(
+            Network::Mainnet,
+            ShelleyPaymentPart::key_hash(kh(payment_seed)),
+            delegation,
+        )
+        .to_bech32()
+        .unwrap()
+    }
+
+    /// The operator's own payment address: the enterprise address of
+    /// `PAYMENT_SEED`.
+    fn payment() -> String {
+        address_of(&PAYMENT_SEED, None)
     }
 
     fn register_body(keyhash: [u8; 28]) -> Vec<u8> {
-        let addr = pallas_addresses::Address::from_bech32(PAYMENT).unwrap();
+        register_body_to(keyhash, &payment(), FEE)
+    }
+
+    fn register_body_to(keyhash: [u8; 28], change_address: &str, fee: u64) -> Vec<u8> {
+        let addr = pallas_addresses::Address::from_bech32(change_address).unwrap();
         let out = PseudoTransactionOutput::PostAlonzo(
             pallas_primitives::babbage::PseudoPostAlonzoTransactionOutput {
                 address: Bytes::from(addr.to_vec()),
@@ -397,7 +425,7 @@ mod tests {
                 index: 0,
             }]),
             outputs: vec![out],
-            fee: FEE,
+            fee,
             ttl: Some(TTL),
             certificates: Some(NonEmptySet::try_from(vec![cert]).unwrap()),
             withdrawals: None,
@@ -422,6 +450,14 @@ mod tests {
     }
 
     fn register_req(drep_id: String, body_cbor: &[u8]) -> DRepRegisterRequest {
+        register_req_at(drep_id, body_cbor, &payment())
+    }
+
+    fn register_req_at(
+        drep_id: String,
+        body_cbor: &[u8],
+        payment_address: &str,
+    ) -> DRepRegisterRequest {
         DRepRegisterRequest {
             kind: DrepWireKind::DrepRegister,
             tx_body_cbor_hex: hex::encode(body_cbor),
@@ -429,14 +465,14 @@ mod tests {
             change_to_payment_address_lovelace: CHANGE,
             deposit_lovelace: DEPOSIT,
             ttl_slot: TTL,
-            payment_address_bech32: PAYMENT.into(),
+            payment_address_bech32: payment_address.into(),
             drep_id_bech32: drep_id,
             anchor: None,
             inputs: vec![UtxoInput {
                 tx_hash_hex: "00".repeat(32),
                 tx_index: 0,
                 amount_lovelace: CHANGE + FEE + DEPOSIT,
-                address_bech32: PAYMENT.into(),
+                address_bech32: payment_address.into(),
             }],
             operator_pin_proof: "0".repeat(16),
             chain_context: ChainContext {
@@ -457,7 +493,7 @@ mod tests {
     #[test]
     fn register_signs_and_witnesses_verify() {
         let drep_seed = [7u8; 32];
-        let payment_seed = [9u8; 32];
+        let payment_seed = PAYMENT_SEED;
         let (drep_id, keyhash) = drep_id_for(&drep_seed);
         let body = register_body(keyhash);
         let req = register_req(drep_id, &body);
@@ -472,13 +508,22 @@ mod tests {
             )
             .unwrap();
             let sig = Signature::from_slice(&hex::decode(&w.signature_hex).unwrap()).unwrap();
-            vk.verify(&body_hash, &sig).expect("witness signature verifies over body hash");
+            vk.verify(&body_hash, &sig)
+                .expect("witness signature verifies over body hash");
         }
         // The DRep witness must be signed by the DRep key, the payment
         // witness by the payment key.
-        let drep_w = res.witnesses.iter().find(|w| matches!(w.role, DrepWitnessRole::Drep)).unwrap();
+        let drep_w = res
+            .witnesses
+            .iter()
+            .find(|w| matches!(w.role, DrepWitnessRole::Drep))
+            .unwrap();
         assert_eq!(drep_w.vkey_hex, hex::encode(vkey_of(&drep_seed)));
-        let pay_w = res.witnesses.iter().find(|w| matches!(w.role, DrepWitnessRole::Payment)).unwrap();
+        let pay_w = res
+            .witnesses
+            .iter()
+            .find(|w| matches!(w.role, DrepWitnessRole::Payment))
+            .unwrap();
         assert_eq!(pay_w.vkey_hex, hex::encode(vkey_of(&payment_seed)));
     }
 
@@ -497,12 +542,202 @@ mod tests {
     }
 
     #[test]
+    fn refuses_change_to_an_address_the_payment_key_does_not_control() {
+        // A compromised online tool names its own address as the payment
+        // address: body and request agree, the change goes there, and the
+        // inputs are labelled with it. Only the payment-key check refuses.
+        let drep_seed = [7u8; 32];
+        let (drep_id, keyhash) = drep_id_for(&drep_seed);
+        let attacker = address_of(&[0x66u8; 32], None);
+        let body = register_body_to(keyhash, &attacker, FEE);
+        let req = register_req_at(drep_id, &body, &attacker);
+        check_register_body(&req).expect("body and request agree");
+        let err = sign_register_core(&req, plain(PAYMENT_SEED), plain(drep_seed)).unwrap_err();
+        assert!(
+            matches!(&err, SignExecuteError::BodyValidation(m) if m.contains("payment key")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn a_payment_address_with_any_stake_part_still_signs() {
+        // The payment address may be a base address whose stake part belongs
+        // to a key this signer does not hold (a pledge or owner key): only
+        // the payment credential is bound.
+        let drep_seed = [7u8; 32];
+        let (drep_id, keyhash) = drep_id_for(&drep_seed);
+        let base = address_of(&PAYMENT_SEED, Some(&[0x55u8; 32]));
+        let body = register_body_to(keyhash, &base, FEE);
+        let req = register_req_at(drep_id, &body, &base);
+        sign_register_core(&req, plain(PAYMENT_SEED), plain(drep_seed)).expect("signs");
+    }
+
+    #[test]
+    fn body_check_refuses_a_request_that_misdescribes_its_body() {
+        // The preview would show the request's fee; the body pays another.
+        let (drep_id, keyhash) = drep_id_for(&[7u8; 32]);
+        let body = register_body(keyhash);
+        let mut req = register_req(drep_id, &body);
+        check_register_body(&req).expect("matches");
+        req.fee_lovelace = FEE - 1;
+        assert!(matches!(
+            check_register_body(&req),
+            Err(SignExecuteError::BodyValidation(_))
+        ));
+        req.tx_body_cbor_hex = "zz".into();
+        assert!(matches!(
+            check_register_body(&req),
+            Err(SignExecuteError::BadCborHex(_))
+        ));
+    }
+
+    #[test]
+    fn preview_is_refused_for_a_request_that_misdescribes_its_body() {
+        use crate::handlers::sign::{parse_and_check, ParsedRequest};
+        let (drep_id, keyhash) = drep_id_for(&[7u8; 32]);
+        let body = register_body(keyhash);
+        let mut req = register_req(drep_id, &body);
+        // A request whose body matches is previewed.
+        let ok = parse_and_check(&serde_json::to_vec(&req).unwrap()).expect("preview");
+        assert!(matches!(ok, ParsedRequest::DrepRegister { .. }));
+        // The same request stating another change amount than the body pays
+        // out: no preview at all.
+        req.change_to_payment_address_lovelace += 1;
+        let err = match parse_and_check(&serde_json::to_vec(&req).unwrap()) {
+            Err(e) => e,
+            Ok(_) => panic!("a request that misdescribes its body must not be previewed"),
+        };
+        assert!(err.message.contains("does not match"), "{}", err.message);
+
+        // Every transaction kind is checked, not only registration: a body
+        // that is no transaction at all is never previewed.
+        let (drep_id, _) = drep_id_for(&[7u8; 32]);
+        let base = register_req(drep_id, &[0xa0]);
+        let update = shared::update::DRepUpdateRequest {
+            kind: DrepWireKind::DrepUpdate,
+            tx_body_cbor_hex: "a0".into(),
+            fee_lovelace: FEE,
+            change_to_payment_address_lovelace: CHANGE,
+            ttl_slot: TTL,
+            payment_address_bech32: base.payment_address_bech32.clone(),
+            drep_id_bech32: base.drep_id_bech32.clone(),
+            anchor: None,
+            inputs: base.inputs.clone(),
+            operator_pin_proof: "0".repeat(16),
+            chain_context: base.chain_context,
+        };
+        assert!(parse_and_check(&serde_json::to_vec(&update).unwrap()).is_err());
+        let retire = shared::retire::DRepRetireRequest {
+            kind: DrepWireKind::DrepRetire,
+            tx_body_cbor_hex: "a0".into(),
+            fee_lovelace: FEE,
+            change_to_payment_address_lovelace: CHANGE,
+            deposit_refund_lovelace: DEPOSIT,
+            ttl_slot: TTL,
+            payment_address_bech32: base.payment_address_bech32.clone(),
+            drep_id_bech32: base.drep_id_bech32.clone(),
+            inputs: base.inputs.clone(),
+            operator_pin_proof: "0".repeat(16),
+            chain_context: base.chain_context,
+        };
+        assert!(parse_and_check(&serde_json::to_vec(&retire).unwrap()).is_err());
+        let vote = shared::vote::DRepVoteRequest {
+            kind: DrepWireKind::DrepVote,
+            tx_body_cbor_hex: "a0".into(),
+            fee_lovelace: FEE,
+            change_to_payment_address_lovelace: CHANGE,
+            ttl_slot: TTL,
+            payment_address_bech32: base.payment_address_bech32.clone(),
+            drep_id_bech32: base.drep_id_bech32.clone(),
+            action_tx_hash_hex: "cd".repeat(32),
+            action_index: 0,
+            vote: shared::vote::VoteChoice::Yes,
+            anchor: None,
+            inputs: base.inputs.clone(),
+            operator_pin_proof: "0".repeat(16),
+            chain_context: base.chain_context,
+        };
+        assert!(parse_and_check(&serde_json::to_vec(&vote).unwrap()).is_err());
+    }
+
+    #[test]
+    fn witness_preview_carries_the_rationale_read_from_the_signed_bytes() {
+        use crate::handlers::sign::{parse_and_check, ParsedRequest};
+        let (drep_id, _) = drep_id_for(&[5u8; 32]);
+        let mut req = shared::witness_doc::DRepWitnessRequest {
+            kind: shared::wire_kind::DrepWireKind::DrepWitnessDoc,
+            canonical_body: "_:c14n0 <https://example.com/#body> _:c14n1 .\n\
+                _:c14n1 <https://example.com/#comment> \"I vote yes.\"@en-us .\n"
+                .to_string(),
+            drep_id_bech32: drep_id,
+            operator_pin_proof: "0".repeat(16),
+            chain_context: witness_ctx(),
+        };
+        match parse_and_check(&serde_json::to_vec(&req).unwrap()).expect("preview") {
+            ParsedRequest::DrepWitness { rationale, .. } => {
+                assert_eq!(rationale.len(), 2);
+                assert!(
+                    matches!(&rationale[1], shared::nquads::BodyLine::Text { field, value, .. }
+                    if field == "comment" && value == "I vote yes.")
+                );
+            }
+            _ => panic!("expected a witness preview"),
+        }
+        // Something that is not a canonical body is refused, not previewed.
+        req.canonical_body = "this is not n-quads .\n".to_string();
+        assert!(parse_and_check(&serde_json::to_vec(&req).unwrap()).is_err());
+    }
+
+    #[test]
+    fn body_check_refuses_a_fee_above_the_ceiling() {
+        // Body and request agree on a fee the signer never signs.
+        let (drep_id, keyhash) = drep_id_for(&[7u8; 32]);
+        let fee = shared::validate::MAX_FEE_LOVELACE + 1;
+        let body = register_body_to(keyhash, &payment(), fee);
+        let mut req = register_req(drep_id.clone(), &body);
+        req.fee_lovelace = fee;
+        let err = check_register_body(&req).unwrap_err();
+        assert!(
+            matches!(&err, SignExecuteError::BodyValidation(m) if m.contains("ceiling")),
+            "{err:?}"
+        );
+        // At the ceiling itself it passes.
+        let fee = shared::validate::MAX_FEE_LOVELACE;
+        let body = register_body_to(keyhash, &payment(), fee);
+        let mut req = register_req(drep_id, &body);
+        req.fee_lovelace = fee;
+        check_register_body(&req).expect("a fee at the ceiling is accepted");
+    }
+
+    #[test]
+    fn key_load_failure_in_the_signing_path_is_redacted() {
+        use std::io::Write;
+        // A raw key without its CBOR header: the loader's own error quotes
+        // the first two bytes. Neither the error nor its source may.
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        write!(
+            f,
+            r#"{{"type":"PaymentSigningKeyShelley_ed25519","description":"","cborHex":"c0ffee11{}"}}"#,
+            "ab".repeat(28)
+        )
+        .unwrap();
+        let err = match load_payment_material_from_path(f.path()) {
+            Err(e) => e,
+            Ok(_) => panic!("a headerless key must not load"),
+        };
+        let SignExecuteError::LoadPayment { source, .. } = &err else {
+            panic!("expected LoadPayment, got {err:?}")
+        };
+        assert!(!source.to_string().contains("c0ff"), "{source}");
+        assert!(!err.to_string().contains("c0ff"), "{err}");
+    }
+
+    #[test]
     fn loads_drep_and_payment_keys_by_role() {
         use std::io::Write;
         fn write_skey(ty: &str, payload_hex: &str) -> tempfile::NamedTempFile {
-            let json = format!(
-                r#"{{"type":"{ty}","description":"x","cborHex":"5820{payload_hex}"}}"#
-            );
+            let json =
+                format!(r#"{{"type":"{ty}","description":"x","cborHex":"5820{payload_hex}"}}"#);
             let mut f = tempfile::NamedTempFile::new().unwrap();
             f.write_all(json.as_bytes()).unwrap();
             // load_skey requires mode 0600.
@@ -553,7 +788,8 @@ mod tests {
         )
         .unwrap();
         let sig = Signature::from_slice(&hex::decode(&res.witness.signature_hex).unwrap()).unwrap();
-        vk.verify(&hash, &sig).expect("witness verifies over body hash");
+        vk.verify(&hash, &sig)
+            .expect("witness verifies over body hash");
     }
 
     #[test]
@@ -570,6 +806,8 @@ mod tests {
             chain_context: witness_ctx(),
         };
         assert!(sign_witness_core(&req, plain(seed)).is_err());
+        // The preview check refuses it too, before any key is involved.
+        assert!(check_witness_body(&req).is_err());
     }
 
     #[test]

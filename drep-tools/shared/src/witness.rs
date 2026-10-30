@@ -4,7 +4,7 @@
 //! **Payment** key spends the fee input, and the **Drep** key authorises
 //! the action (cert or vote). The role is carried on the wire so the
 //! signer's preview and the online tool can label each witness; the role
-//! is presentation only — submission re-wraps both as role-agnostic raw
+//! is presentation only: submission re-wraps both as role-agnostic raw
 //! witnesses (`airgap_core::tx::RawVkeyWitness`).
 //!
 //! This is DRep Tools' own witness role, deliberately separate from SPO
@@ -22,7 +22,7 @@ use ts_rs::TS;
 pub enum DrepWitnessRole {
     /// Spends the input UTXO at the configured payment_address.
     Payment,
-    /// The DRep key — authorises the registration, update, retirement, or
+    /// The DRep key: authorises the registration, update, retirement, or
     /// vote. Its verification key hashes (blake2b-224) to the DRep id.
     Drep,
 }

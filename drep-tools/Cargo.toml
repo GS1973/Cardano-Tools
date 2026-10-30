@@ -1,4 +1,4 @@
-# DRep Tools — Cardano DRep identity management + governance voting.
+# DRep Tools: Cardano DRep identity management + governance voting.
 #
 # Air-gapped pair (drep-online + drep-signer) for registering, updating,
 # retiring, and voting as a Cardano DRep. Built entirely on the
@@ -7,9 +7,9 @@
 # machine.
 #
 # Workspace crates:
-#   shared      — DRep wire types + body validators
-#   drep-online — internet-connected web app (Axum + Pallas + Koios)
-#   drep-signer — air-gapped signing application (Pallas, no network)
+#   shared:      DRep wire types + body validators
+#   drep-online: internet-connected web app (Axum + Pallas + Koios)
+#   drep-signer: air-gapped signing application (Pallas, no network)
 
 [workspace]
 resolver = "2"
@@ -17,7 +17,7 @@ members = ["shared", "drep-online", "drep-signer"]
 
 [workspace.package]
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 authors = ["Smit Blockchain Operations (Pool BKIND) <developmentbkind@gmail.com>"]
 
@@ -41,8 +41,10 @@ pallas-addresses  = "0.35"
 ur = "0.4"
 zeroize = { version = "1", features = ["derive"] }
 
-# The shared role-neutral library — sibling repo, never SPO Tools.
+# The shared role-neutral library: sibling repo, never SPO Tools.
 airgap-core = { path = "../airgap-core" }
+# The guarded document fetch: online tool only, never the signer.
+airgap-fetch-guard = { path = "../airgap-core/fetch-guard" }
 
 [profile.release]
 opt-level = 3

@@ -1,10 +1,10 @@
-//! DRep Tools — online tool.
+//! DRep Tools: online tool.
 //!
 //! Internet-connected web backend. Talks to Koios for chain data, builds
 //! unsigned DRep transactions, hands them to the air-gapped signer via QR,
 //! and submits signed transactions back to Koios. Holds no keys.
 //!
-//! Listens on a loopback interface only — never a public address. The
+//! Listens on a loopback interface only, never a public address. The
 //! loopback constraint is enforced at startup (see `parse_listen_addr`);
 //! a non-loopback `--listen` is rejected unless the operator explicitly
 //! passes `--allow-non-loopback`.
@@ -40,7 +40,7 @@ const DEFAULT_KOIOS_BASE_URL: &str = "https://api.koios.rest/api/v1";
 /// The parsed address is enforced to be loopback (`127.0.0.0/8` or `::1`):
 /// this tool must never listen on a public interface. A non-loopback
 /// address is rejected unless `--allow-non-loopback` is explicitly passed,
-/// which is strongly discouraged — the online tool holds Koios access and
+/// which is strongly discouraged: the online tool holds Koios access and
 /// builds/submits transactions.
 fn parse_listen_addr(args: &[String]) -> Result<SocketAddr, String> {
     let allow_non_loopback = args.iter().any(|a| a == "--allow-non-loopback");
@@ -78,7 +78,7 @@ fn parse_listen_addr(args: &[String]) -> Result<SocketAddr, String> {
         return Err(format!(
             "refusing to bind non-loopback address `{addr}`: this tool is designed to \
              listen on a loopback address (127.0.0.1) only. Re-run with `--listen 127.0.0.1:PORT`, \
-             or pass `--allow-non-loopback` to override (strongly discouraged — it exposes Koios \
+             or pass `--allow-non-loopback` to override (strongly discouraged: it exposes Koios \
              access and transaction building/submission to the network).\nUsage: {USAGE}"
         ));
     }
@@ -88,21 +88,52 @@ fn parse_listen_addr(args: &[String]) -> Result<SocketAddr, String> {
 fn parse_koios_url(args: &[String]) -> Result<String, String> {
     let mut iter = args.iter().skip(1);
     while let Some(arg) = iter.next() {
-        if arg == "--koios-url" {
-            let val = iter
-                .next()
-                .ok_or_else(|| format!("--koios-url requires a URL value\nUsage: {USAGE}"))?;
-            return Ok(val.clone());
-        }
-        if let Some(val) = arg.strip_prefix("--koios-url=") {
-            return Ok(val.to_string());
-        }
+        let val = if arg == "--koios-url" {
+            iter.next()
+                .ok_or_else(|| format!("--koios-url requires a URL value\nUsage: {USAGE}"))?
+                .clone()
+        } else if let Some(val) = arg.strip_prefix("--koios-url=") {
+            val.to_string()
+        } else {
+            continue;
+        };
+        check_koios_url(&val)?;
+        return Ok(val);
     }
     Ok(DEFAULT_KOIOS_BASE_URL.to_string())
 }
 
+/// The Koios URL must be https, so the Koios API key and the chain data
+/// never cross the network in the clear. Plain http is accepted only for a
+/// Koios on this machine (localhost, 127.0.0.1 or ::1).
+fn check_koios_url(val: &str) -> Result<(), String> {
+    if val.is_empty() {
+        return Err(format!("--koios-url requires a URL value\nUsage: {USAGE}"));
+    }
+    let url = reqwest::Url::parse(val)
+        .map_err(|e| format!("--koios-url `{val}` is not a valid URL: {e}\nUsage: {USAGE}"))?;
+    let host = url.host_str().unwrap_or("");
+    let on_this_machine = host.eq_ignore_ascii_case("localhost")
+        || host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    match url.scheme() {
+        "https" => Ok(()),
+        "http" if on_this_machine => Ok(()),
+        _ => Err(format!(
+            "--koios-url `{val}` must be an https URL. Plain http is accepted only for a \
+             Koios on this machine (localhost, 127.0.0.1 or ::1).\nUsage: {USAGE}"
+        )),
+    }
+}
+
 pub(crate) struct AppState {
     pub(crate) http: reqwest::Client,
+    /// Client for operator-supplied document URLs: no Koios API key, public
+    /// addresses only (the `airgap-fetch-guard` crate).
+    pub(crate) doc_http: reqwest::Client,
     pub(crate) config: RwLock<config::OnlineConfig>,
     pub(crate) config_path: std::path::PathBuf,
     pub(crate) koios_base_url: String,
@@ -122,13 +153,16 @@ async fn health() -> Json<Health> {
     Json(Health { ok: true })
 }
 async fn status() -> Json<Status> {
-    Json(Status { name: "drep-tools-online", version: VERSION })
+    Json(Status {
+        name: "drep-tools-online",
+        version: VERSION,
+    })
 }
 
 /// Build the application router.
 ///
 /// The frontend fallback is registered BEFORE the middleware stack so that
-/// every served response — including the SPA fallback document and any 404 —
+/// every served response, including the SPA fallback document and any 404,
 /// passes through the CSRF guard and the CSP / X-Frame-Options /
 /// X-Content-Type-Options / Referrer-Policy response-header layers.
 /// Registered after `.layer(...)` it would leave the served HTML/JS/CSS
@@ -138,11 +172,23 @@ fn build_app(state: Arc<AppState>, listen_addr: SocketAddr) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/status", get(status))
-        .route("/api/drep-config", get(handlers::setup::online_config_get).post(handlers::setup::online_config_post))
+        .route(
+            "/api/drep-config",
+            get(handlers::setup::online_config_get).post(handlers::setup::online_config_post),
+        )
         .route("/api/manifest-hash", post(util::manifest_hash_handler))
-        .route("/api/register/preview", get(handlers::register::register_preview))
-        .route("/api/register/start", post(handlers::register::register_start))
-        .route("/api/register/result", post(handlers::register::register_result))
+        .route(
+            "/api/register/preview",
+            get(handlers::register::register_preview),
+        )
+        .route(
+            "/api/register/start",
+            post(handlers::register::register_start),
+        )
+        .route(
+            "/api/register/result",
+            post(handlers::register::register_result),
+        )
         .route("/api/register/submit", post(util::submit_tx_handler))
         .route("/api/update/preview", get(handlers::update::update_preview))
         .route("/api/update/start", post(handlers::update::update_start))
@@ -157,14 +203,26 @@ fn build_app(state: Arc<AppState>, listen_addr: SocketAddr) -> Router {
         .route("/api/vote/result", post(handlers::vote::vote_result))
         .route("/api/vote/submit", post(util::submit_tx_handler))
         .route("/api/witness/start", post(handlers::witness::witness_start))
-        .route("/api/witness/result", post(handlers::witness::witness_result))
+        .route(
+            "/api/witness/result",
+            post(handlers::witness::witness_result),
+        )
         .route("/api/pairing/info", get(handlers::pairing::pairing_info))
-        .route("/api/pairing/preview", post(handlers::pairing::pairing_preview))
-        .route("/api/pairing/set-peer", post(handlers::pairing::pairing_set_peer))
+        .route(
+            "/api/pairing/preview",
+            post(handlers::pairing::pairing_preview),
+        )
+        .route(
+            "/api/pairing/set-peer",
+            post(handlers::pairing::pairing_set_peer),
+        )
         .route("/api/pairing/clear", post(handlers::pairing::pairing_clear))
         .fallback(handlers::frontend::frontend_handler)
         .layer(DefaultBodyLimit::max(1_048_576))
-        .layer(axum::middleware::from_fn_with_state(csrf_cfg, shared::csrf::csrf_guard))
+        .layer(axum::middleware::from_fn_with_state(
+            csrf_cfg,
+            shared::csrf::csrf_guard,
+        ))
         .layer(SetResponseHeaderLayer::overriding(
             header::CONTENT_SECURITY_POLICY,
             HeaderValue::from_static(CONTENT_SECURITY_POLICY),
@@ -206,14 +264,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !listen_addr.ip().is_loopback() {
         tracing::warn!(
             addr = %listen_addr,
-            "SECURITY: binding to a non-loopback address — the online tool is reachable beyond \
-             localhost; this exposes Koios access and transaction building/submission. \
+            "SECURITY: binding to a non-loopback address, the online tool is reachable beyond \
+             localhost. This exposes Koios access and transaction building/submission. \
              Strongly discouraged."
         );
     }
 
     let cfg_path = config::config_path();
-    let initial_config = config::load(&cfg_path);
+    // Fail closed: a corrupt or unreadable config must not be silently
+    // replaced with defaults, or the next save would overwrite the
+    // operator's setup and pairing keys.
+    let mut initial_config = config::load(&cfg_path).map_err(|e| {
+        eprintln!("{e}");
+        Box::<dyn std::error::Error>::from("failed to load config")
+    })?;
+    // Create the X25519 channel keypair now, so it exists before any request
+    // arrives and GET /api/pairing/info only ever reads it. A failure here is
+    // not fatal: the pairing handlers keep their own fallback.
+    if let Err(e) = config::ensure_own_crypto_skey(&cfg_path, &mut initial_config) {
+        tracing::warn!(error = %e, "could not create the channel keypair at startup. Pairing will create it on first use");
+    }
 
     let mut http_builder = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
@@ -231,10 +301,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 http_builder = http_builder.default_headers(headers);
                 info!("Koios API key configured");
             }
-            Err(e) => tracing::warn!(error = %e, "Koios API key contains invalid characters; ignoring"),
+            Err(e) => {
+                tracing::warn!(error = %e, "Koios API key contains invalid characters. Ignoring")
+            }
         }
     }
     let http = http_builder.build()?;
+    let doc_http = airgap_fetch_guard::client()?;
 
     info!(
         path = %cfg_path.display(),
@@ -244,13 +317,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state = Arc::new(AppState {
         http,
+        doc_http,
         config: RwLock::new(initial_config),
         config_path: cfg_path,
         koios_base_url,
     });
     let app = build_app(state, listen_addr);
 
-    let listener = tokio::net::TcpListener::bind(listen_addr).await?;
+    let listener = tokio::net::TcpListener::bind(listen_addr)
+        .await
+        .map_err(|e| {
+            eprintln!("{}", shared::listen::listen_error(listen_addr, &e));
+            Box::<dyn std::error::Error>::from("cannot listen")
+        })?;
     let bound = listener.local_addr()?;
     println!("DRep online tool listening on http://{bound}");
     info!(addr = %bound, version = VERSION, "drep-tools-online listening (frontend embedded)");
@@ -266,6 +345,7 @@ mod tests {
     fn test_state() -> Arc<AppState> {
         Arc::new(AppState {
             http: reqwest::Client::new(),
+            doc_http: reqwest::Client::new(),
             config: RwLock::new(config::OnlineConfig::default()),
             config_path: std::path::PathBuf::from("/nonexistent/online.json"),
             koios_base_url: "http://127.0.0.1:1".to_string(),
@@ -302,24 +382,19 @@ mod tests {
         .is_ok());
     }
 
-    /// A wildcard bind can never serve a request — no client sends
+    /// A wildcard bind can never serve a request: no client sends
     /// `0.0.0.0` / `[::]` as its Host header, so the derived CSRF
     /// allow-list would reject everything with 403. Rejected up front,
     /// even with the non-loopback override.
     #[test]
     fn wildcard_bind_is_rejected_even_with_override() {
-        assert!(parse_listen_addr(&args(&[
-            "--listen",
-            "0.0.0.0:9300",
-            "--allow-non-loopback"
-        ]))
-        .is_err());
-        assert!(parse_listen_addr(&args(&[
-            "--listen",
-            "[::]:9300",
-            "--allow-non-loopback"
-        ]))
-        .is_err());
+        assert!(
+            parse_listen_addr(&args(&["--listen", "0.0.0.0:9300", "--allow-non-loopback"]))
+                .is_err()
+        );
+        assert!(
+            parse_listen_addr(&args(&["--listen", "[::]:9300", "--allow-non-loopback"])).is_err()
+        );
     }
 
     /// Regression guard for the layer-ordering bug: the frontend fallback must
@@ -347,7 +422,11 @@ mod tests {
             "frontend response is missing Content-Security-Policy"
         );
         assert_eq!(
-            resp.headers().get("x-frame-options").unwrap().to_str().unwrap(),
+            resp.headers()
+                .get("x-frame-options")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "DENY"
         );
         assert_eq!(
@@ -371,6 +450,39 @@ mod tests {
             parse_koios_url(&args(&["--koios-url=http://127.0.0.1:8080/api/v1"])).unwrap(),
             "http://127.0.0.1:8080/api/v1"
         );
+        assert_eq!(parse_koios_url(&args(&[])).unwrap(), DEFAULT_KOIOS_BASE_URL);
+    }
+
+    #[test]
+    fn koios_url_must_be_https_unless_on_this_machine() {
+        let parse = |u: &str| parse_koios_url(&args(&["--koios-url", u]));
+        assert_eq!(
+            parse("https://api.koios.rest/api/v1").unwrap(),
+            "https://api.koios.rest/api/v1"
+        );
+        for local in [
+            "http://127.0.0.1:8080/api/v1",
+            "http://localhost:8080/api/v1",
+            "http://[::1]:8080/api/v1",
+        ] {
+            assert_eq!(parse(local).unwrap(), local);
+            assert_eq!(
+                parse_koios_url(&args(&[&format!("--koios-url={local}")])).unwrap(),
+                local
+            );
+        }
+        for refused in [
+            "http://api.koios.rest/api/v1",
+            "http://192.0.2.10:8080/api/v1",
+            "http://localhost.example.org/api/v1",
+            "ftp://127.0.0.1/api/v1",
+            "api.koios.rest/api/v1",
+            "",
+        ] {
+            assert!(parse(refused).is_err(), "{refused}");
+        }
+        assert!(parse_koios_url(&args(&["--koios-url="])).is_err());
+        assert!(parse_koios_url(&args(&["--listen", "127.0.0.1:9300", "--koios-url"])).is_err());
         assert_eq!(parse_koios_url(&args(&[])).unwrap(), DEFAULT_KOIOS_BASE_URL);
     }
 }

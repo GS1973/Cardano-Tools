@@ -50,7 +50,7 @@
               <div class="raw-line mb-3">{{ request.tx_body_cbor_hex }}</div>
             </template>
             <div v-for="w in result.witnesses" :key="w.role" class="mb-3">
-              <div class="text-caption text-medium-emphasis mb-1">Witness — {{ w.role }}</div>
+              <div class="text-caption text-medium-emphasis mb-1">Witness: {{ w.role }}</div>
               <div class="text-caption text-medium-emphasis">vkey</div>
               <div class="raw-line mb-1">{{ w.vkey_hex }}</div>
               <div class="text-caption text-medium-emphasis">signature</div>

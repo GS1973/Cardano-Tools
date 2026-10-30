@@ -28,7 +28,7 @@ const emit = defineEmits<{
 }>()
 
 // html5-qrcode's constructor only accepts an element id, so give every
-// instance its own — two scanners mounted at once (inline panel plus the
+// instance its own: two scanners mounted at once (inline panel plus the
 // enlarge dialog) must not both bind to a single page-global id.
 const readerId = `qr-reader-${Math.random().toString(36).slice(2)}`
 const active = ref(false)
@@ -96,7 +96,7 @@ function finishCollection() {
 function friendlyError(e: unknown): string {
   const raw = (e instanceof Error ? e.message : String(e)).toLowerCase()
   if (raw.includes('notallowederror') || raw.includes('permission denied')) {
-    return 'Camera permission denied — allow camera access in your browser.'
+    return 'Camera permission denied: allow camera access in your browser.'
   }
   if (
     raw.includes('notfounderror') ||

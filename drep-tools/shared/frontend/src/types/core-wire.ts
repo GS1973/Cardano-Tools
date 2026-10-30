@@ -37,7 +37,7 @@ export type UtxoInput = {
 tx_hash_hex: string, tx_index: number, 
 /**
  * Lovelace at this UTxO. Wire-encoded as string (industry pattern
- * for Cardano/NEAR/Solana — JS Number loses precision >2^53).
+ * for Cardano/NEAR/Solana: JS Number loses precision >2^53).
  */
 amount_lovelace: string, 
 /**

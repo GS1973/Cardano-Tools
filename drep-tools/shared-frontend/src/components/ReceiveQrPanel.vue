@@ -20,7 +20,7 @@
           <v-btn class="mt-2" size="small" variant="text" prepend-icon="mdi-arrow-expand" @click="$emit('update:cameraEnlarged', true)">Enlarge</v-btn>
         </div>
         <div style="flex: 1 1 auto; min-width: 0;">
-          <!-- Placeholder mirrors airgap-core's UR_TYPE_ACTION tag ("spo-tools-action-v2"), shared across products — not a typo. -->
+          <!-- Placeholder mirrors airgap-core's UR_TYPE_ACTION tag ("spo-tools-action-v2"), shared across products, not a typo. -->
           <v-textarea
             :model-value="resultInput"
             @update:model-value="(v: string) => $emit('update:resultInput', v)"

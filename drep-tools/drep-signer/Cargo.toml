@@ -1,6 +1,6 @@
 [package]
 name = "drep-signer"
-version = "1.1.0"
+version = "1.1.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -30,15 +30,14 @@ tower-http = { version = "0.6", features = ["set-header"] }
 
 # Frontend assets are embedded into the binary at compile time so the
 # signer is a single executable that can be copied onto the air-gapped VM.
-rust-embed = "8"
+# The embedded files carry fixed timestamps, so rebuilding the frontend
+# does not change the binary: a release can be reproduced from the source.
+rust-embed = { version = "8", features = ["deterministic-timestamps"] }
 mime_guess = "2"
 
 # Ed25519 signing for the DRep + payment witnesses.
 ed25519-dalek = "2"
 
-# Blake2b-256 for the tx body hash; blake2b-224 for the DRep id check
-# comes from airgap-core::validate.
-blake2 = "0.10"
 hex = "0.4"
 sha2 = "0.10"
 

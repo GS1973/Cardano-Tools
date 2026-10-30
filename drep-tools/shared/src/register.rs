@@ -1,4 +1,4 @@
-//! DRep registration request/result — wire format between online tool and
+//! DRep registration request/result: wire format between online tool and
 //! signer.
 //!
 //! The request carries the unsigned Conway tx body (one `RegDRepCert`,
@@ -13,8 +13,8 @@ use ts_rs::TS;
 use crate::anchor::GovAnchor;
 use crate::chain_context::ChainContext;
 use crate::utxo::UtxoInput;
-use crate::witness::VkeyWitness;
 use crate::wire_kind::DrepWireKind;
+use crate::witness::VkeyWitness;
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

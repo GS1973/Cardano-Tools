@@ -1,6 +1,6 @@
 [package]
 name = "drep-online"
-version = "1.1.0"
+version = "1.1.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 shared = { path = "../shared" }
 airgap-core = { workspace = true }
+airgap-fetch-guard = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -31,7 +32,9 @@ zeroize = { workspace = true }
 
 # Frontend assets are embedded into the binary at compile time so
 # deployment is a single executable.
-rust-embed = "8"
+# The embedded files carry fixed timestamps, so rebuilding the frontend
+# does not change the binary: a release can be reproduced from the source.
+rust-embed = { version = "8", features = ["deterministic-timestamps"] }
 mime_guess = "2"
 
 ts-rs = { version = "12", features = ["serde-compat", "serde-json-impl"] }

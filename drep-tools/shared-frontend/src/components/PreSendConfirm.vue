@@ -18,7 +18,7 @@
         <div class="mt-4">
           <p class="text-body-2 mb-1"><strong>Operator PIN</strong></p>
           <p class="text-caption text-medium-emphasis mb-2">
-            Pick any 4 digits — you will retype the same PIN on the signer screen
+            Pick any 4 digits: you will retype the same PIN on the signer screen
             to confirm operator presence at sign time.
           </p>
           <v-text-field

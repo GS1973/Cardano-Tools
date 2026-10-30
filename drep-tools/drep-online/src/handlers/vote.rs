@@ -68,7 +68,7 @@ pub(crate) struct VotePreview {
     /// an unregistered DRep is rejected by the ledger; the UI warns on this
     /// and `vote_start` hard-blocks it.
     registered: bool,
-    /// Every open governance action — a DRep votes on all action types, so
+    /// Every open governance action: a DRep votes on all action types, so
     /// nothing is filtered out (unlike the SPO tool).
     proposals: Vec<VoteProposalSummary>,
     /// Configured manifest base URL, so the form can offer file-name entry.
@@ -77,14 +77,16 @@ pub(crate) struct VotePreview {
 }
 
 /// Whether Koios reports this DRep as currently registered. A DRep must be
-/// registered to vote — the ledger rejects a vote from an unregistered
-/// credential — so preview warns on it and start hard-blocks on it. Uses
+/// registered to vote, the ledger rejects a vote from an unregistered
+/// credential, so preview warns on it and start hard-blocks on it. Uses
 /// the same predicate as the register / update previews.
 async fn is_drep_registered(app: &Arc<AppState>, drep_id: &str) -> Result<bool, ErrorEnvelope> {
-    let info = koios::drep_info(&app.http, &app.koios_base_url, drep_id).await.map_err(|e| {
-        error!(error = %e, "koios drep_info failed");
-        ErrorEnvelope::upstream("upstream service unavailable")
-    })?;
+    let info = koios::drep_info(&app.http, &app.koios_base_url, drep_id)
+        .await
+        .map_err(|e| {
+            error!(error = %e, "koios drep_info failed");
+            ErrorEnvelope::upstream("upstream service unavailable")
+        })?;
     Ok(crate::util::drep_is_registered(info.as_ref()))
 }
 
@@ -92,17 +94,26 @@ pub(crate) async fn vote_preview(
     State(app): State<Arc<AppState>>,
 ) -> Result<Json<VotePreview>, ErrorEnvelope> {
     let cfg = app.config.read().unwrap().clone();
-    let drep_id = cfg.drep_id.clone().ok_or(ErrorEnvelope::not_configured("DRep id not configured"))?;
+    let drep_id = cfg
+        .drep_id
+        .clone()
+        .ok_or(ErrorEnvelope::not_configured("DRep id not configured"))?;
     let payment_address = cfg
         .payment_address
         .clone()
-        .ok_or(ErrorEnvelope::not_configured("payment_address not configured"))?;
+        .ok_or(ErrorEnvelope::not_configured(
+            "payment_address not configured",
+        ))?;
     let (utxos, amounts, total) =
         fetch_payment_utxos(&app.http, &app.koios_base_url, &payment_address).await?;
     let payment_utxos = utxos
         .iter()
         .zip(amounts.iter())
-        .map(|(u, &lovelace)| UtxoSummary { tx_hash: u.tx_hash.clone(), tx_index: u.tx_index, lovelace })
+        .map(|(u, &lovelace)| UtxoSummary {
+            tx_hash: u.tx_hash.clone(),
+            tx_index: u.tx_index,
+            lovelace,
+        })
         .collect();
     let proposals: Vec<VoteProposalSummary> = koios::proposal_list(&app.http, &app.koios_base_url)
         .await
@@ -113,13 +124,19 @@ pub(crate) async fn vote_preview(
         .into_iter()
         .map(summarize)
         .collect();
-    let tip = koios::tip(&app.http, &app.koios_base_url).await.map_err(|e| {
-        error!(error = %e, "koios tip failed");
-        ErrorEnvelope::upstream("upstream service unavailable")
-    })?;
+    let tip = koios::tip(&app.http, &app.koios_base_url)
+        .await
+        .map_err(|e| {
+            error!(error = %e, "koios tip failed");
+            ErrorEnvelope::upstream("upstream service unavailable")
+        })?;
     let registered = is_drep_registered(&app, &drep_id).await?;
-    let estimated_fee =
-        tx_builder::preview_fee_lovelace(utxos.len(), crate::util::input_assets(&utxos)?.len());
+    let fee_params = crate::util::fee_params(&app).await?;
+    let estimated_fee = tx_builder::preview_fee_lovelace(
+        utxos.len(),
+        crate::util::input_assets(&utxos)?.len(),
+        &fee_params,
+    );
     Ok(Json(VotePreview {
         drep_id,
         payment_address,
@@ -130,7 +147,7 @@ pub(crate) async fn vote_preview(
         registered,
         proposals,
         manifest_base_url: cfg.manifest_base_url.clone(),
-        chain_context: chain_context_from_tip(&tip),
+        chain_context: chain_context_from_tip(&tip)?,
     }))
 }
 
@@ -168,34 +185,50 @@ pub(crate) async fn vote_start(
     State(app): State<Arc<AppState>>,
     Json(body): Json<VoteStartBody>,
 ) -> Result<Json<VoteStartResponse>, ErrorEnvelope> {
-    let StartCtx { own_sk, peer_pk, drep_id_bech32, drep_keyhash, payment_address } =
-        start_ctx(&app, &body.pin)?;
+    let StartCtx {
+        own_sk,
+        peer_pk,
+        drep_id_bech32,
+        drep_keyhash,
+        payment_address,
+    } = start_ctx(&app, &body.pin)?;
     let vote = parse_vote_choice(&body.vote)?;
     let action_tx_hash = body.action_tx_hash.trim().to_string();
     if action_tx_hash.len() != 64 || !action_tx_hash.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err(ErrorEnvelope::invalid("action_tx_hash must be 64 hex chars (32-byte tx hash)"));
+        return Err(ErrorEnvelope::invalid(
+            "action_tx_hash must be 64 hex chars (32-byte tx hash)",
+        ));
     }
     let anchor_pair = parse_anchor(&body.anchor_url, &body.anchor_hash)?;
 
-    // A vote from an unregistered DRep is rejected by the ledger — block it
+    // A vote from an unregistered DRep is rejected by the ledger: block it
     // here so a doomed transaction never reaches the signer.
     if !is_drep_registered(&app, &drep_id_bech32).await? {
-        return Err(ErrorEnvelope::invalid("DRep is not registered — register it before voting"));
+        return Err(ErrorEnvelope::invalid(
+            "DRep is not registered: register it before voting",
+        ));
     }
 
     let (utxos, amounts, total) =
         fetch_payment_utxos(&app.http, &app.koios_base_url, &payment_address).await?;
     let utxo_inputs: Vec<tx_builder::TxInput> = utxos
         .iter()
-        .map(|u| tx_builder::TxInput { tx_hash_hex: u.tx_hash.clone(), tx_index: u.tx_index })
+        .map(|u| tx_builder::TxInput {
+            tx_hash_hex: u.tx_hash.clone(),
+            tx_index: u.tx_index,
+        })
         .collect();
     if utxo_inputs.is_empty() {
-        return Err(ErrorEnvelope::insufficient_funds("no UTXOs at payment address"));
+        return Err(ErrorEnvelope::insufficient_funds(
+            "no UTXOs at payment address",
+        ));
     }
-    let tip = koios::tip(&app.http, &app.koios_base_url).await.map_err(|e| {
-        error!(error = %e, "koios tip failed");
-        ErrorEnvelope::upstream("upstream service unavailable")
-    })?;
+    let tip = koios::tip(&app.http, &app.koios_base_url)
+        .await
+        .map_err(|e| {
+            error!(error = %e, "koios tip failed");
+            ErrorEnvelope::upstream("upstream service unavailable")
+        })?;
     let ttl_slot = tip.abs_slot.saturating_add(TTL_MARGIN_SLOTS);
 
     let change_assets = crate::util::input_assets(&utxos)?;
@@ -203,7 +236,9 @@ pub(crate) async fn vote_start(
     // The fee is computed from the encoded body size inside the builder; an
     // underfunded wallet surfaces here as a clear insufficient-funds error,
     // before anything reaches the signer.
+    let fee_params = crate::util::fee_params(&app).await?;
     let built = tx_builder::build_vote_body(&tx_builder::VoteInputs {
+        fee_params,
         utxo_inputs: &utxo_inputs,
         utxo_total_lovelace: total,
         change_assets: &change_assets,
@@ -212,24 +247,26 @@ pub(crate) async fn vote_start(
         action_tx_hash_hex: &action_tx_hash,
         action_index: body.action_index,
         vote,
-        anchor: anchor_pair
-            .as_ref()
-            .map(|(u, h)| tx_builder::AnchorInput { url: u.clone(), hash_hex: h.clone() }),
+        anchor: anchor_pair.as_ref().map(|(u, h)| tx_builder::AnchorInput {
+            url: u.clone(),
+            hash_hex: h.clone(),
+        }),
         ttl_slot,
     })
     .map_err(|e| match e {
-        tx_builder::TxBuildError::InsufficientInputs { .. } => ErrorEnvelope::insufficient_funds(
-            "payment address cannot cover fee + min-ADA change",
-        ),
+        tx_builder::TxBuildError::InsufficientInputs { .. } => {
+            ErrorEnvelope::insufficient_funds("payment address cannot cover fee + min-ADA change")
+        }
         e => {
             error!(error = %e, "vote body build failed");
             ErrorEnvelope::internal("transaction build failed")
         }
     })?;
     let fee = built.fee_lovelace;
+    crate::util::guard_fee(fee)?;
 
     let body_hash_hex = hex::encode(pallas_crypto::hash::Hasher::<256>::hash(&built.body_cbor));
-    let chain_context = chain_context_from_tip(&tip);
+    let chain_context = chain_context_from_tip(&tip)?;
     let request_inputs = build_request_inputs(&utxo_inputs, &amounts, &payment_address);
     let mut request = shared::vote::DRepVoteRequest {
         kind: shared::wire_kind::DrepWireKind::DrepVote,
@@ -242,17 +279,29 @@ pub(crate) async fn vote_start(
         action_tx_hash_hex: action_tx_hash,
         action_index: body.action_index,
         vote,
-        anchor: anchor_pair.map(|(u, h)| shared::anchor::GovAnchor { url: u, hash_hex: h }),
+        anchor: anchor_pair.map(|(u, h)| shared::anchor::GovAnchor {
+            url: u,
+            hash_hex: h,
+        }),
         inputs: request_inputs,
         operator_pin_proof: String::new(),
         chain_context,
     };
     let body_fp = shared::request_body_fp(&request);
-    request.operator_pin_proof =
-        shared::pin::pin_proof_hex(&body.pin, "drep_vote", request.chain_context.built_at_unix, &body_fp);
+    request.operator_pin_proof = shared::pin::pin_proof_hex(
+        &body.pin,
+        "drep_vote",
+        request.chain_context.built_at_unix,
+        &body_fp,
+    );
     let (_json, ur_fragments, request_fingerprint) =
         shared::wire_io::build_sign_request(&request, &own_sk, &peer_pk)?;
-    Ok(Json(VoteStartResponse { request, body_hash_hex, ur_fragments, request_fingerprint }))
+    Ok(Json(VoteStartResponse {
+        request,
+        body_hash_hex,
+        ur_fragments,
+        request_fingerprint,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -268,7 +317,12 @@ pub(crate) async fn vote_result(
         return Err(ErrorEnvelope::invalid("no UR fragments"));
     }
     let (own_sk, peer_pk) = crate::util::paired_keys_or_err(&app)?;
-    let json_bytes = ur_decode_required(&body.ur_fragments, &peer_pk, &own_sk, shared::qr::Direction::Response)?;
+    let json_bytes = ur_decode_required(
+        &body.ur_fragments,
+        &peer_pk,
+        &own_sk,
+        shared::qr::Direction::Response,
+    )?;
     let result = serde_json::from_slice(&json_bytes).map_err(|e| {
         error!(error = %e, "invalid result payload");
         ErrorEnvelope::invalid("invalid result payload")

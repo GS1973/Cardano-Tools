@@ -1,4 +1,4 @@
-//! DRep update / refresh request/result — wire format between online tool
+//! DRep update / refresh request/result: wire format between online tool
 //! and signer.
 //!
 //! One `UpdateDRepCert` (no deposit). Two uses in one cert: point the
@@ -14,8 +14,8 @@ use ts_rs::TS;
 use crate::anchor::GovAnchor;
 use crate::chain_context::ChainContext;
 use crate::utxo::UtxoInput;
-use crate::witness::VkeyWitness;
 use crate::wire_kind::DrepWireKind;
+use crate::witness::VkeyWitness;
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

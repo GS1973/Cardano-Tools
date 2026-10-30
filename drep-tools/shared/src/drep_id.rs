@@ -1,11 +1,11 @@
-//! DRep id decoding — bech32 `drep1...` to the 28-byte credential hash.
+//! DRep id decoding: bech32 `drep1...` to the 28-byte credential hash.
 //!
 //! A key-based DRep is identified on-chain by `blake2b-224(drep_vkey)`, a
 //! 28-byte key hash, carried in certs and votes as
 //! `StakeCredential::AddrKeyhash(hash)`. The operator-facing `drep1...`
 //! bech32 string comes in two shapes:
 //!
-//! - **CIP-105 (legacy):** `bech32("drep", 28-byte hash)` — the bare key
+//! - **CIP-105 (legacy):** `bech32("drep", 28-byte hash)`: the bare key
 //!   hash, no header.
 //! - **CIP-129 (current):** `bech32("drep", header_byte ++ 28-byte hash)`
 //!   where the header is `0x22` for a key-hash DRep and `0x23` for a
@@ -13,7 +13,7 @@
 //!
 //! cardano-cli has emitted both over time, so this accepts either and
 //! always returns the 28-byte key hash. Script-hash DReps (`0x23`) are
-//! rejected — this tool manages a key-based DRep only.
+//! rejected: this tool manages a key-based DRep only.
 
 use thiserror::Error;
 
@@ -29,7 +29,7 @@ const CIP129_SCRIPT_HEADER: u8 = 0x23;
 pub enum DrepIdError {
     #[error("invalid bech32 `{0}`: {1}")]
     Bech32(String, String),
-    #[error("wrong bech32 prefix — expected `drep1...`, got `{0}1...`")]
+    #[error("wrong bech32 prefix: expected `drep1...`, got `{0}1...`")]
     WrongHrp(String),
     #[error("script-hash DReps are not supported (this tool manages a key-based DRep)")]
     ScriptDrep,
@@ -127,13 +127,19 @@ mod tests {
     #[test]
     fn rejects_wrong_hrp() {
         let s = encode("pool", &[0u8; 28]);
-        assert!(matches!(drep_id_to_keyhash(&s), Err(DrepIdError::WrongHrp(_))));
+        assert!(matches!(
+            drep_id_to_keyhash(&s),
+            Err(DrepIdError::WrongHrp(_))
+        ));
     }
 
     #[test]
     fn rejects_bad_length() {
         let s = encode("drep", &[0u8; 20]);
-        assert!(matches!(drep_id_to_keyhash(&s), Err(DrepIdError::BadLength { len: 20 })));
+        assert!(matches!(
+            drep_id_to_keyhash(&s),
+            Err(DrepIdError::BadLength { len: 20 })
+        ));
     }
 
     #[test]
@@ -149,8 +155,12 @@ mod tests {
     #[test]
     fn matches_known_answer_pair() {
         let drep = "drep1ygqpzg3ng32kvaugnx4thnxaamlsqyfzxdz92enh3zv64wc0h3n2d";
-        let expected = hex::decode("00112233445566778899aabbccddeeff00112233445566778899aabb").unwrap();
-        assert_eq!(drep_id_to_keyhash(drep).unwrap().as_slice(), expected.as_slice());
+        let expected =
+            hex::decode("00112233445566778899aabbccddeeff00112233445566778899aabb").unwrap();
+        assert_eq!(
+            drep_id_to_keyhash(drep).unwrap().as_slice(),
+            expected.as_slice()
+        );
     }
 
     #[test]

@@ -92,7 +92,7 @@ kind: DrepWireKind, tx_body_cbor_hex: string, fee_lovelace: string, change_to_pa
 drep_id_bech32: string, 
 /**
  * Governance action being voted on: 64-char hex of the proposal tx
- * hash plus the proposal index — the action id the protocol uses.
+ * hash plus the proposal index: the action id the protocol uses.
  */
 action_tx_hash_hex: string, action_index: number, vote: VoteChoice, 
 /**

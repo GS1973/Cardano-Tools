@@ -71,34 +71,73 @@ lose the corresponding guarantees.
   the signer refuses to sign on a mismatch. This is a deliberate extra layer: a
   per-request, human-supplied approval that proves a person is present at the
   signer and intends *this* signing, bound to the request so it cannot be
-  replayed. It complements — it does not replace — the fingerprint check above.
+  replayed. It complements, it does not replace, the fingerprint check above.
 - The PIN search space is 10 000 (4 decimal digits). The proof is
   domain-separated and bound to the request, so a PIN guess is per-request, not
   global, and the signer locks a request out after 5 wrong-PIN attempts,
   forcing a rebuild on the online tool. It is not a brute-force-resistant
-  authenticator; it is the entropy the operator must supply at both ends of the
+  authenticator. It is the entropy the operator must supply at both ends of the
   encrypted-channel boundary, defeating signing triggered by a fully
   compromised online tool that holds a paired X25519 key but has no human at
   the signer screen.
 
 ### Body validator (DRep register, update, retire, vote)
 - The body validator on the signer checks that every field of the Conway
-  TransactionBody — fee, TTL, the single change output, the certificate, the
-  optional governance anchor (CIP-119 / CIP-136), and the inputs — matches the
+  TransactionBody (fee, TTL, the single change output, the certificate, the
+  optional governance anchor (CIP-119 / CIP-136), and the inputs) matches the
   request, and that the loaded DRep verification key hashes (blake2b-224) to the
   DRep id named in the request. A compromised online tool therefore cannot make
   the signer act as a different DRep, nor sign a body that does not match the
-  preview.
+  preview. The check runs when the request is received, so a request that
+  misdescribes its body is refused before any preview is shown, and again at
+  signing, before a key is used.
+- The signer refuses a request whose `payment_address_bech32` is not
+  controlled by the payment key it holds: the address's payment credential
+  must be the blake2b-224 hash of that key. The validator sends the change to
+  the request's payment address, and the request is written by the online
+  tool. Without this check a compromised online tool could name an address of
+  its own, spend the operator's real UTxOs and collect the change there. Only
+  the payment part is bound, so an enterprise address or a base address with
+  any stake part is accepted. An address with the operator's payment
+  credential and a foreign stake part stays spendable by the operator's key
+  alone.
+- The signer refuses any fee above 3 ADA (`MAX_FEE_LOVELACE`), well over the
+  largest fee these operations honestly produce. If a protocol-parameter
+  change ever lifts honest fees past the ceiling, the signer refuses until it
+  is updated.
 - As with any air-gapped signer, the validator can only cross-check the
   request's `inputs[i].address_bech32` against the request's
-  `payment_address_bech32`; it cannot consult the chain to confirm those UTxOs
+  `payment_address_bech32`. It cannot consult the chain to confirm those UTxOs
   really sit there. A compromised paired online tool could lie about the input
-  addresses. Because a DRep operation spends only the operator's own payment
-  UTxOs to cover the fee and the refundable deposit — there is no pledge or
-  third-party stake at the payment address — the worst case is funding the
-  operation from a different one of the operator's own UTxOs, not a drain to an
-  attacker. The signer's preview surfaces the funding inputs (each UTxO and its
+  addresses. Because the change returns to an address the operator's own
+  payment key controls (see above) and the fee is capped, the worst case is
+  funding the operation from a different one of the operator's own UTxOs, not
+  a drain to an attacker. The signer's preview surfaces the funding inputs (each UTxO and its
   amount) for visibility.
+
+### Rationale witness
+- The CIP-100 canonical body the DRep key signs is produced by the online
+  tool's browser (URDNA2015). The signer does not recompute it. It shows the
+  operator the text of the exact bytes it will sign, read back statement by
+  statement, with invisible and text-reordering characters made visible and
+  any line it cannot read shown as it is. The operator comparing that text
+  with the rationale they wrote is what binds the witness to their words. A
+  compromised online tool can still canonicalise a different document. It
+  cannot do so without the signer's screen showing that other text.
+- The signer refuses a payload that is not a canonical N-Quads body, so the
+  witness path cannot be used to sign a transaction.
+
+### Document fetch (online tool)
+- The manifest-hash helper fetches an operator-supplied URL. It connects only
+  to public internet addresses: loopback, private, link-local, carrier-grade
+  NAT and reserved ranges are refused, for an IP literal, for every address a
+  name resolves to, and for each redirect hop. It uses a client of its own, so
+  the Koios API key is never sent to a document host. Only `https://` is
+  fetched, also across redirects: the result is a hash the operator anchors
+  on-chain, and over plain HTTP a network attacker could alter the document
+  and with it that hash. Behind an HTTP proxy the proxy resolves names itself.
+  The tool then checks the name once before the request, cannot bind the
+  connection, and follows no redirect.
 
 ### Air-gap
 - The signer's startup banner and the periodic carrier + `rx_bytes`/`tx_bytes`
@@ -109,13 +148,18 @@ lose the corresponding guarantees.
 
 ### System clock (request freshness)
 - The signer refuses to sign a request whose `chain_context` snapshot is older
-  than 24 hours, bounding replay of a stale-but-still-valid signed transaction.
-  This reads the host wall clock — the one piece of live state an air-gapped
+  than 24 hours, so a request left waiting cannot be signed long after it was built.
+  This reads the host wall clock: the one piece of live state an air-gapped
   machine cannot cross-check. The signer refuses to sign when its clock reads
   before 2024-01-01 UTC ("clock unset"), returning a distinct "set the clock"
-  error. The freshness window is a coarse upper bound; the per-request
+  error. The freshness window is a coarse upper bound. The per-request
   exactly-once ledger (clock-independent) is what actually prevents a request
   from being signed twice. Keep the air-gapped machine's clock set.
+- The signer also refuses a transaction whose time-to-live lies more than
+  three hours past its own clock (`MAX_TTL_AHEAD_SLOTS` in airgap-core), so
+  whatever it signs expires within three hours and cannot be held back and
+  submitted much later. The slot numbers in the request come from the
+  online tool and cannot bound this. The signer's clock can.
 
 ### Forward-compatibility
 - The signer's skey loader does **not** use `deny_unknown_fields`, so future
@@ -133,34 +177,37 @@ lose the corresponding guarantees.
 
 ### Signing-key file mode
 - `load_skey` rejects any `.skey` file whose mode permits group or other access
-  (`mode & 0o077 != 0`) before reading it. cardano-cli writes 0600 by default;
-  manually moved files may need `chmod 600`.
+  (`mode & 0o077 != 0`) before reading it. cardano-cli writes 0600 by default.
+  Manually moved files may need `chmod 600`.
 
 ### Best-effort secret zeroization
 - The signer wraps the DRep and payment seeds in `Zeroize` / `Zeroizing` so the
   raw bytes are wiped on drop, and the keygen write path holds the hex encoding
-  and the skey-envelope JSON in `Zeroizing` too. This reduces — but does not
-  eliminate — exposure to core dumps, swap-out, and same-UID `/proc/<pid>/mem`
+  and the skey-envelope JSON in `Zeroizing` too. This reduces, but does not
+  eliminate, exposure to core dumps, swap-out, and same-UID `/proc/<pid>/mem`
   reads. Third-party crates (`ed25519-dalek::SigningKey`) keep their own
   short-lived copies that this tool does not zeroize. Treat the signer host as a
   trust boundary regardless.
 
 ### Key and nonce entropy source
-- Every secret this tool generates — the DRep and payment Ed25519 seeds, the
-  X25519 channel static secret, and every XChaCha20-Poly1305 nonce — is drawn
+- Every secret this tool generates (the DRep and payment Ed25519 seeds, the
+  X25519 channel static secret, and every XChaCha20-Poly1305 nonce) is drawn
   directly from the operating-system CSPRNG via `getrandom` (`/dev/urandom` on
   Linux). No seeded or userspace PRNG is ever used for key material, and there
   is no hardcoded or time-derived seed anywhere.
 - The entropy call **fails closed**: if the OS cannot supply randomness the
-  generator returns an error and aborts; it never falls back to a weaker source.
-  That weak-fallback / predictable-generation branch is the failure mode behind
-  the June 2026 SecondFi/Yoroi mass drain; it cannot occur here because the only
-  entropy path is the kernel CSPRNG.
+  generator returns an error and aborts. It never falls back to a weaker source.
+- Signing is deterministic Ed25519 (RFC 8032). The per-signature nonce is
+  derived from a secret prefix of the signing key together with the message
+  (`ed25519-dalek` for plain keys, `pallas-crypto` for extended BIP32-Ed25519
+  keys, where the secret half kR is the prefix). It is never derived from
+  public transaction data alone, the flaw class that lets anyone compute a
+  private key from a single on-chain signature.
 - Keys are generated offline on the air-gapped signer and never leave it.
 
 ## Dependencies
 
-- DRep Tools vendors nothing; every dependency is a published crates.io crate.
+- DRep Tools vendors nothing. Every dependency is a published crates.io crate.
   `deny.toml` enforces a license allow-list, one version per crate, and
   crates.io as the only source. The encrypted-channel layer uses `x25519-dalek`
   2.x over upstream `curve25519-dalek` 4.x with constant-time scalar arithmetic.

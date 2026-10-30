@@ -12,7 +12,7 @@ const onlineProxyTarget = process.env.DREP_TOOLS_ONLINE_PROXY ?? 'http://localho
 
 // The string-shorthand proxy rewrites only the Host header (changeOrigin);
 // the browser's `Origin: http://localhost:5173` is forwarded untouched, and
-// the backend's CSRF guard only accepts its own origin — so every proxied
+// the backend's CSRF guard only accepts its own origin, so every proxied
 // POST/PUT/DELETE would 403. Rewrite Origin to the backend's own origin so
 // the dev proxy passes the guard without weakening it.
 const proxyToBackend: ProxyOptions = {

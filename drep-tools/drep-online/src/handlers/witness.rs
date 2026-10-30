@@ -39,16 +39,24 @@ pub(crate) async fn witness_start(
     State(app): State<Arc<AppState>>,
     Json(body): Json<WitnessStartBody>,
 ) -> Result<Json<WitnessStartResponse>, ErrorEnvelope> {
-    let StartCtx { own_sk, peer_pk, drep_id_bech32, .. } = start_ctx(&app, &body.pin)?;
+    let StartCtx {
+        own_sk,
+        peer_pk,
+        drep_id_bech32,
+        ..
+    } = start_ctx(&app, &body.pin)?;
     shared::validate::assert_canonical_body_nquads(body.canonical_body.as_bytes())
         .map_err(|e| ErrorEnvelope::invalid(format!("not a canonical CIP-100 body: {e}")))?;
-    let tip = koios::tip(&app.http, &app.koios_base_url).await.map_err(|e| {
-        error!(error = %e, "koios tip failed");
-        ErrorEnvelope::upstream("upstream service unavailable")
-    })?;
-    let chain_context = chain_context_from_tip(&tip);
-    let body_hash_hex =
-        hex::encode(pallas_crypto::hash::Hasher::<256>::hash(body.canonical_body.as_bytes()));
+    let tip = koios::tip(&app.http, &app.koios_base_url)
+        .await
+        .map_err(|e| {
+            error!(error = %e, "koios tip failed");
+            ErrorEnvelope::upstream("upstream service unavailable")
+        })?;
+    let chain_context = chain_context_from_tip(&tip)?;
+    let body_hash_hex = hex::encode(pallas_crypto::hash::Hasher::<256>::hash(
+        body.canonical_body.as_bytes(),
+    ));
     let mut request = shared::witness_doc::DRepWitnessRequest {
         kind: shared::wire_kind::DrepWireKind::DrepWitnessDoc,
         canonical_body: body.canonical_body,
@@ -65,7 +73,12 @@ pub(crate) async fn witness_start(
     );
     let (_json, ur_fragments, request_fingerprint) =
         shared::wire_io::build_sign_request(&request, &own_sk, &peer_pk)?;
-    Ok(Json(WitnessStartResponse { request, body_hash_hex, ur_fragments, request_fingerprint }))
+    Ok(Json(WitnessStartResponse {
+        request,
+        body_hash_hex,
+        ur_fragments,
+        request_fingerprint,
+    }))
 }
 
 #[derive(Deserialize)]
